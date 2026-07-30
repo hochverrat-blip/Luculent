@@ -9,13 +9,14 @@ class Word:
         self,
         word_id: int,
         lemma: str = "",
-        definition: str = "",
         language: Language = Language.KOREAN,
         pos: POS = POS.NOUN
     ):
         self._word_id = word_id
         self._lemma = lemma
-        self._definition = definition
+        self._koreanDefinition = ""
+        self._koreanDefinition = ""
+        self._gloss = ""
         self._due: Optional[date] = None
         self._difficulty = 0.0
         self._stability = 0.0

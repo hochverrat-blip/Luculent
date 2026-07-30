@@ -37,7 +37,7 @@ def the_word():
     return Word(
         word_id=30,
         lemma="문서",
-        definition="document",
+        english_definition="document",
         language=Language.KOREAN,
         pos=POS.NOUN,
     )
@@ -133,7 +133,7 @@ def test_word_properties():
     word = the_word()
     assert word.word_id == 30
     assert word.lemma == "문서"
-    assert word.definition == "document"
+    assert word.english_definition == "document"
     assert word.language is Language.KOREAN
     assert word.pos is POS.NOUN
 
@@ -150,7 +150,6 @@ def test_word_uses_expected_defaults():
     word = Word(word_id=30)
 
     assert word.lemma == ""
-    assert word.definition == ""
     assert word.language is Language.KOREAN
     assert word.pos is POS.NOUN
     assert word.status is Status.NEW

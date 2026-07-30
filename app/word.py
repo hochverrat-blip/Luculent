@@ -9,13 +9,14 @@ class Word:
         self,
         word_id: int,
         lemma: str = "",
+        english_definition: str = "",
         language: Language = Language.KOREAN,
         pos: POS = POS.NOUN
     ):
         self._word_id = word_id
         self._lemma = lemma
-        self._koreanDefinition = ""
-        self._koreanDefinition = ""
+        self._korean_definition = ""
+        self._english_definition = english_definition
         self._gloss = ""
         self._due: Optional[date] = None
         self._difficulty = 0.0
@@ -41,12 +42,28 @@ class Word:
         self._lemma = value
 
     @property
-    def definition(self) -> str:
-        return self._definition
+    def korean_definition(self) -> str:
+        return self._korean_definition
 
-    @definition.setter
-    def definition(self, value: str) -> None:
-        self._definition = value
+    @korean_definition.setter
+    def korean_definition(self, value: str) -> None:
+        self._korean_definition = value
+
+    @property
+    def english_definition(self) -> str:
+        return self._english_definition
+
+    @english_definition.setter
+    def english_definition(self, value: str) -> None:
+        self._english_definition = value
+
+    @property
+    def gloss(self) -> str:
+        return self._gloss
+
+    @gloss.setter
+    def gloss(self, value: str) -> None:
+        self._gloss = value
 
     @property
     def due(self) -> Optional[date]:

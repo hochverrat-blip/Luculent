@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from datetime import date
+from typing import TYPE_CHECKING
 from typing import Optional
-from app.enums import *
-from app.document import *
+
+from app.domain.enums import Language, POS, Status
+
+if TYPE_CHECKING:
+    from app.domain.document import DocPart
 
 class Word:
     def __init__(
@@ -55,6 +60,15 @@ class Word:
 
     @english_definition.setter
     def english_definition(self, value: str) -> None:
+        self._english_definition = value
+
+    @property
+    def definition(self) -> str:
+        """Backward-compatible alias for the English definition."""
+        return self._english_definition
+
+    @definition.setter
+    def definition(self, value: str) -> None:
         self._english_definition = value
 
     @property

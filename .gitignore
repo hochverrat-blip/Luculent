@@ -1,5 +1,8 @@
 .idea/
 .venv/
-tests/__pycache__
-app/__pycache__
+.pytest_cache/
+__pycache__/
 workdocs/
+*.db
+*.db-shm
+*.db-wal

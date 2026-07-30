@@ -1,10 +1,10 @@
 import pytest
 from datetime import date
 import pytest
-from app.document import *
-from app.enums import *
-from app.word import *
-from app.user import *
+from app.domain.document import *
+from app.domain.enums import *
+from app.domain.word import *
+from app.domain.user import *
 
 
 def the_user():
@@ -133,7 +133,10 @@ def test_word_properties():
     word = the_word()
     assert word.word_id == 30
     assert word.lemma == "문서"
+    assert word.korean_definition == ""
     assert word.english_definition == "document"
+    assert word.definition == "document"
+    assert word.gloss == ""
     assert word.language is Language.KOREAN
     assert word.pos is POS.NOUN
 
@@ -162,6 +165,8 @@ def test_word_properties_can_be_updated():
 
     word.lemma = "문서들"
     word.definition = "documents"
+    word.korean_definition = "기록을 담은 것"
+    word.gloss = "document"
     word.due = due_date
     word.difficulty = 4.5
     word.stability = 8.0
@@ -172,6 +177,9 @@ def test_word_properties_can_be_updated():
 
     assert word.lemma == "문서들"
     assert word.definition == "documents"
+    assert word.english_definition == "documents"
+    assert word.korean_definition == "기록을 담은 것"
+    assert word.gloss == "document"
     assert word.due == due_date
     assert word.difficulty == pytest.approx(4.5)
     assert word.stability == pytest.approx(8.0)

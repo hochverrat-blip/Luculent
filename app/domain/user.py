@@ -1,4 +1,10 @@
-from app.document import *
+from __future__ import annotations
+
+from datetime import date
+from typing import Optional
+
+from app.domain.document import Document
+from app.domain.word import Word
 
 
 class User:

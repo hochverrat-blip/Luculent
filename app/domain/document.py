@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from typing import Optional
 from datetime import date
-from app.enums import *
-from app.word import *
+from typing import TYPE_CHECKING, Optional
+
+from app.domain.enums import Language
+
+if TYPE_CHECKING:
+    from app.domain.word import DocPartWord
 
 class Document:
     def __init__(

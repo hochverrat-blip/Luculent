@@ -63,6 +63,19 @@ def test_missing_settings_can_use_sqlite_defaults(tmp_path):
     assert settings == Settings()
 
 
+def test_missing_settings_are_created_from_example_file(tmp_path):
+    settings_file = tmp_path / "settings.txt"
+    example_file = tmp_path / "settings.example.txt"
+    example_contents = "database=sqlite\nsqlite_path=created.db\n"
+    example_file.write_text(example_contents, encoding="utf-8")
+
+    settings = Settings.from_file(settings_file)
+
+    assert settings_file.read_text(encoding="utf-8") == example_contents
+    assert settings.database == "sqlite"
+    assert settings.sqlite_path == "created.db"
+
+
 def test_factory_selects_sqlite_from_settings(tmp_path):
     settings = Settings(database="sqlite", sqlite_path=str(tmp_path / "test.db"))
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields
 from pathlib import Path
+from shutil import copyfile
 
 
 @dataclass(frozen=True)
@@ -23,9 +24,13 @@ class Settings:
     ) -> Settings:
         settings_path = Path(path)
         if not settings_path.exists():
-            if use_defaults_when_missing:
+            example_path = settings_path.with_name("settings.example.txt")
+            if example_path.exists():
+                copyfile(example_path, settings_path)
+            elif use_defaults_when_missing:
                 return cls()
-            raise FileNotFoundError(f"Settings file not found: {settings_path}")
+            else:
+                raise FileNotFoundError(f"Settings file not found: {settings_path}")
 
         values: dict[str, str] = {}
         valid_keys = {field.name for field in fields(cls)}

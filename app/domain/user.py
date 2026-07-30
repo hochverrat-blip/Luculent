@@ -10,7 +10,7 @@ from app.domain.word import Word
 class User:
     def __init__(
         self,
-        user_id: int,
+        user_id: int | None,
         name: str,
         created: Optional[date] = None
     ):
@@ -22,8 +22,11 @@ class User:
         self._words: list[Word] = []
 
     @property
-    def user_id(self) -> int:
+    def user_id(self) -> int | None:
         return self._user_id
+
+    def _assign_id(self, user_id: int) -> None:
+        self._user_id = user_id
 
     @property
     def name(self) -> str:

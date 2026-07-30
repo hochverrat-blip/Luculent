@@ -8,63 +8,63 @@ from app.domain.word import DocPartWord, Word
 
 
 class Repository(ABC):
-    """Database-neutral persistence boundary for Luculent domain objects."""
+    """Database-neutral repository interface"""
 
     @abstractmethod
     def initialize(self) -> None:
-        """Create the database structures required by the app."""
+        """Create the database structures"""
 
     @abstractmethod
     def save_user(self, user: User) -> None:
-        """Insert or update a user."""
+        """Insert or update a user, assigning a generated ID when its ID is None"""
 
     @abstractmethod
     def get_user(self, user_id: int) -> User | None:
-        """Return a user, or None when the ID does not exist."""
+        """Return a user, or None when the ID does not exist"""
 
     @abstractmethod
     def save_document(self, user_id: int, document: Document) -> None:
-        """Insert or update a document owned by a user."""
+        """Insert or update a document, assigning a generated ID when needed"""
 
     @abstractmethod
     def get_document(self, document_id: int) -> Document | None:
-        """Return a document, or None when the ID does not exist."""
+        """Return a document, or None when the ID does not exist"""
 
     @abstractmethod
     def list_documents(self, user_id: int) -> list[Document]:
-        """Return a user's documents in import and ID order."""
+        """Return a user's documents in import and ID order"""
 
     @abstractmethod
     def save_doc_part(self, document_id: int, doc_part: DocPart) -> None:
-        """Insert or update a document part."""
+        """Insert or update a document part, assigning a generated ID when needed"""
 
     @abstractmethod
     def list_doc_parts(self, document_id: int) -> list[DocPart]:
-        """Return document parts in reading order."""
+        """Return document parts in reading order"""
 
     @abstractmethod
     def save_word(self, user_id: int, word: Word) -> None:
-        """Insert or update a word owned by a user."""
+        """Insert or update a word, assigning a generated ID when needed"""
 
     @abstractmethod
     def get_word(self, word_id: int) -> Word | None:
-        """Return a word, or None when the ID does not exist."""
+        """Return a word, or None when the ID does not exist"""
 
     @abstractmethod
     def list_words(self, user_id: int) -> list[Word]:
-        """Return a user's words in ID order."""
+        """Return a user's words in ID order"""
 
     @abstractmethod
     def save_doc_part_word(self, association: DocPartWord) -> None:
-        """Insert or update the occurrence count linking a part and word."""
+        """Insert or update the occurrence count linking a part and word"""
 
     @abstractmethod
     def list_doc_part_words(self, doc_part_id: int) -> list[DocPartWord]:
-        """Return all word associations for a document part."""
+        """Return all word associations for a document part"""
 
     @abstractmethod
     def close(self) -> None:
-        """Release database resources."""
+        """Release database resources"""
 
     def __enter__(self) -> Repository:
         self.initialize()

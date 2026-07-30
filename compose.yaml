@@ -1,0 +1,20 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: luculent
+      MYSQL_USER: luculent
+      MYSQL_PASSWORD: luculent
+    ports:
+      - "32000:3306"
+    volumes:
+      - luculent_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  luculent_mysql_data:

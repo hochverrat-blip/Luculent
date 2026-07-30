@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 class Document:
     def __init__(
         self,
-        document_id: int,
+        document_id: int | None,
         title: str,
         text: str,
         language: Language,
@@ -26,8 +26,11 @@ class Document:
         self._doc_parts: list[DocPart] = []
 
     @property
-    def document_id(self) -> int:
+    def document_id(self) -> int | None:
         return self._document_id
+
+    def _assign_id(self, document_id: int) -> None:
+        self._document_id = document_id
 
     @property
     def title(self) -> str:
@@ -53,7 +56,7 @@ class Document:
 class DocPart:
     def __init__(
         self,
-        doc_part_id: int,
+        doc_part_id: int | None,
         text: str,
         position: int,
         readability: float = 0.0,
@@ -68,8 +71,11 @@ class DocPart:
         self._doc_part_words: list[DocPartWord] = []
 
     @property
-    def doc_part_id(self) -> int:
+    def doc_part_id(self) -> int | None:
         return self._doc_part_id
+
+    def _assign_id(self, doc_part_id: int) -> None:
+        self._doc_part_id = doc_part_id
 
     @property
     def text(self) -> str:

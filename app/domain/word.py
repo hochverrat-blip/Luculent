@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 class Word:
     def __init__(
         self,
-        word_id: int,
+        word_id: int | None,
         lemma: str = "",
         english_definition: str = "",
         language: Language = Language.KOREAN,
@@ -35,8 +35,11 @@ class Word:
         self._doc_part_words: list[DocPartWord] = []
 
     @property
-    def word_id(self) -> int:
+    def word_id(self) -> int | None:
         return self._word_id
+
+    def _assign_id(self, word_id: int) -> None:
+        self._word_id = word_id
 
     @property
     def lemma(self) -> str:
@@ -60,15 +63,6 @@ class Word:
 
     @english_definition.setter
     def english_definition(self, value: str) -> None:
-        self._english_definition = value
-
-    @property
-    def definition(self) -> str:
-        """Backward-compatible alias for the English definition."""
-        return self._english_definition
-
-    @definition.setter
-    def definition(self, value: str) -> None:
         self._english_definition = value
 
     @property

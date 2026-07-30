@@ -3,6 +3,7 @@
 .pytest_cache/
 __pycache__/
 workdocs/
+settings.txt
 *.db
 *.db-shm
 *.db-wal

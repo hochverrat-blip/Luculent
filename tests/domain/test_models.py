@@ -135,7 +135,6 @@ def test_word_properties():
     assert word.lemma == "문서"
     assert word.korean_definition == ""
     assert word.english_definition == "document"
-    assert word.definition == "document"
     assert word.gloss == ""
     assert word.language is Language.KOREAN
     assert word.pos is POS.NOUN
@@ -164,7 +163,7 @@ def test_word_properties_can_be_updated():
     due_date = date(2026, 7, 25)
 
     word.lemma = "문서들"
-    word.definition = "documents"
+    word.english_definition = "documents"
     word.korean_definition = "기록을 담은 것"
     word.gloss = "document"
     word.due = due_date
@@ -176,7 +175,6 @@ def test_word_properties_can_be_updated():
     word.pos = POS.NOUN
 
     assert word.lemma == "문서들"
-    assert word.definition == "documents"
     assert word.english_definition == "documents"
     assert word.korean_definition == "기록을 담은 것"
     assert word.gloss == "document"

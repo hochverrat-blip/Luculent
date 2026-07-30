@@ -1,0 +1,10 @@
+# Copy file to settings.txt. Default is SQLite.
+database=sqlite
+sqlite_path=luculent.db
+
+# Used when database=mysql
+mysql_host=localhost
+mysql_port=32000
+mysql_database=luculent
+mysql_user=luculent
+mysql_password=luculent

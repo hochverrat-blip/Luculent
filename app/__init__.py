@@ -1,3 +1,15 @@
-from app.repositories import Repository, SQLiteRepository, create_repository
+from app.repositories import (
+    MySQLRepository,
+    Repository,
+    SQLiteRepository,
+    create_repository,
+)
+from app.settings import Settings
 
-__all__ = ["Repository", "SQLiteRepository", "create_repository"]
+__all__ = [
+    "MySQLRepository",
+    "Repository",
+    "SQLiteRepository",
+    "Settings",
+    "create_repository",
+]

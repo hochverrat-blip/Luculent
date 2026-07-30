@@ -12,7 +12,6 @@ from app.repositories.base import Repository
 
 
 class SQLiteRepository(Repository):
-    """SQLite implementation of the Luculent persistence boundary."""
 
     def __init__(self, database_path: str | Path = "luculent.db"):
         self._connection = sqlite3.connect(database_path)
@@ -23,13 +22,13 @@ class SQLiteRepository(Repository):
         self._connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
+                user_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 created TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS documents (
-                document_id INTEGER PRIMARY KEY,
+                document_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
                 title TEXT NOT NULL,
                 text TEXT NOT NULL,
@@ -39,7 +38,7 @@ class SQLiteRepository(Repository):
             );
 
             CREATE TABLE IF NOT EXISTS doc_parts (
-                doc_part_id INTEGER PRIMARY KEY,
+                doc_part_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 document_id INTEGER NOT NULL,
                 text TEXT NOT NULL,
                 position INTEGER NOT NULL,
@@ -51,7 +50,7 @@ class SQLiteRepository(Repository):
             );
 
             CREATE TABLE IF NOT EXISTS words (
-                word_id INTEGER PRIMARY KEY,
+                word_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
                 lemma TEXT NOT NULL,
                 korean_definition TEXT NOT NULL,
@@ -82,6 +81,14 @@ class SQLiteRepository(Repository):
         self._connection.commit()
 
     def save_user(self, user: User) -> None:
+        if user.user_id is None:
+            user._assign_id(
+                self._execute_insert(
+                    "INSERT INTO users (name, created) VALUES (?, ?)",
+                    (user.name, user.created.isoformat()),
+                )
+            )
+            return
         self._connection.execute(
             """
             INSERT INTO users (user_id, name, created)
@@ -112,6 +119,23 @@ class SQLiteRepository(Repository):
         return user
 
     def save_document(self, user_id: int, document: Document) -> None:
+        if document.document_id is None:
+            document._assign_id(
+                self._execute_insert(
+                    """
+                    INSERT INTO documents (user_id, title, text, language, imported)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        user_id,
+                        document.title,
+                        document.text,
+                        document.language.name,
+                        document.imported.isoformat(),
+                    ),
+                )
+            )
+            return
         self._connection.execute(
             """
             INSERT INTO documents (
@@ -162,6 +186,25 @@ class SQLiteRepository(Repository):
         return [self._document_from_row(row) for row in rows]
 
     def save_doc_part(self, document_id: int, doc_part: DocPart) -> None:
+        if doc_part.doc_part_id is None:
+            doc_part._assign_id(
+                self._execute_insert(
+                    """
+                    INSERT INTO doc_parts (
+                        document_id, text, position, readability, active
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        document_id,
+                        doc_part.text,
+                        doc_part.position,
+                        doc_part.readability,
+                        int(doc_part.active),
+                    ),
+                )
+            )
+            return
         self._connection.execute(
             """
             INSERT INTO doc_parts (
@@ -199,6 +242,35 @@ class SQLiteRepository(Repository):
         return [self._doc_part_from_row(row) for row in rows]
 
     def save_word(self, user_id: int, word: Word) -> None:
+        if word.word_id is None:
+            word._assign_id(
+                self._execute_insert(
+                    """
+                    INSERT INTO words (
+                        user_id, lemma, korean_definition, english_definition,
+                        gloss, due, difficulty, stability, image_path, status,
+                        last_reviewed, pos, language
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        user_id,
+                        word.lemma,
+                        word.korean_definition,
+                        word.english_definition,
+                        word.gloss,
+                        self._date_to_text(word.due),
+                        word.difficulty,
+                        word.stability,
+                        word.image_path,
+                        word.status.name,
+                        self._date_to_text(word.last_reviewed),
+                        word.pos.name,
+                        word.language.name,
+                    ),
+                )
+            )
+            return
         self._connection.execute(
             """
             INSERT INTO words (
@@ -258,6 +330,8 @@ class SQLiteRepository(Repository):
         return [self._word_from_row(row) for row in rows]
 
     def save_doc_part_word(self, association: DocPartWord) -> None:
+        if association.word.word_id is None or association.doc_part.doc_part_id is None:
+            raise ValueError("Word and document part must be saved first")
         self._connection.execute(
             """
             INSERT INTO doc_part_words (word_id, doc_part_id, occurrences)
@@ -279,8 +353,8 @@ class SQLiteRepository(Repository):
             SELECT dpw.occurrences, dp.doc_part_id, dp.text, dp.position,
                    dp.readability, dp.active, w.*
             FROM doc_part_words AS dpw
-            JOIN doc_parts AS dp ON dp.doc_part_id = dpw.doc_part_id
-            JOIN words AS w ON w.word_id = dpw.word_id
+            INNER JOIN doc_parts AS dp ON dp.doc_part_id = dpw.doc_part_id
+            INNER JOIN words AS w ON w.word_id = dpw.word_id
             WHERE dpw.doc_part_id = ?
             ORDER BY w.word_id
             """,
@@ -297,6 +371,11 @@ class SQLiteRepository(Repository):
 
     def close(self) -> None:
         self._connection.close()
+
+    def _execute_insert(self, sql: str, parameters: tuple[object, ...]) -> int:
+        cursor = self._connection.execute(sql, parameters)
+        self._connection.commit()
+        return cursor.lastrowid
 
     def _document_from_row(self, row: sqlite3.Row) -> Document:
         document = Document(

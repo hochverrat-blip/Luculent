@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+import app.settings as settings_module
 from app.repositories import SQLiteRepository, create_repository
 from app.settings import Settings
 
@@ -74,6 +75,25 @@ def test_missing_settings_are_created_from_example_file(tmp_path):
     assert settings_file.read_text(encoding="utf-8") == example_contents
     assert settings.database == "sqlite"
     assert settings.sqlite_path == "created.db"
+
+
+def test_default_settings_path_is_stable_when_working_directory_changes(
+    tmp_path, monkeypatch
+):
+    project_directory = tmp_path / "project"
+    project_directory.mkdir()
+    settings_file = project_directory / "settings.txt"
+    example_file = project_directory / "settings.example.txt"
+    example_file.write_text("database=sqlite\nsqlite_path=stable.db\n", encoding="utf-8")
+    monkeypatch.setattr(settings_module, "DEFAULT_SETTINGS_PATH", settings_file)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    settings = Settings.from_file()
+
+    assert settings_file.exists()
+    assert settings.sqlite_path == "stable.db"
 
 
 def test_factory_selects_sqlite_from_settings(tmp_path):

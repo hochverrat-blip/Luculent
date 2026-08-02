@@ -17,8 +17,11 @@ class SQLiteRepository(Repository):
         self._connection = sqlite3.connect(database_path)
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA foreign_keys = ON")
+        self._initialized = False
 
     def initialize(self) -> None:
+        if self._initialized:
+            return
         self._connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -79,6 +82,7 @@ class SQLiteRepository(Repository):
             """
         )
         self._connection.commit()
+        self._initialized = True
 
     def save_user(self, user: User) -> None:
         if user.user_id is None:

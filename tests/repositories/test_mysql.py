@@ -11,31 +11,57 @@ from tests.repositories.contract import RepositoryContract
 
 @pytest.fixture
 def repository():
-    settings = Settings(
-        database="mysql",
-        mysql_host=os.getenv("MYSQL_HOST", "127.0.0.1"),
-        mysql_port=int(os.getenv("MYSQL_PORT", "32000")),
-        mysql_database=os.getenv("MYSQL_DATABASE", "luculent"),
-        mysql_user=os.getenv("MYSQL_USER", "luculent"),
-        mysql_password=os.getenv("MYSQL_PASSWORD", "luculent"),
-    )
+    host = os.getenv("MYSQL_HOST", "127.0.0.1")
+    port = int(os.getenv("MYSQL_PORT", "32000"))
+    root_password = os.getenv("MYSQL_ROOT_PASSWORD", "root")
+    running_in_ci = os.getenv("GITHUB_ACTIONS") == "true"
     try:
+        from mysql.connector import connect
         from mysql.connector import Error as MySQLError
     except ImportError:
+        if running_in_ci:
+            raise
         pytest.skip("mysql-connector-python is not installed")
 
     try:
-        repo = MySQLRepository(settings)
+        admin_connection = connect(
+            host=host,
+            port=port,
+            user="root",
+            password=root_password,
+        )
     except MySQLError as error:
-        if error.errno in {2002, 2003, 2005}:
+        if not running_in_ci and error.errno in {2002, 2003, 2005}:
             pytest.skip("MySQL test server is not available, skipping MySQL tests")
         raise
 
+    cursor = admin_connection.cursor()
     try:
+        cursor.execute("DROP DATABASE IF EXISTS luculent_test")
+        cursor.execute(
+            "CREATE DATABASE luculent_test "
+            "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+        )
+        cursor.close()
+
+        settings = Settings(
+            database="mysql",
+            mysql_host=host,
+            mysql_port=port,
+            mysql_database="luculent_test",
+            mysql_user="root",
+            mysql_password=root_password,
+        )
+        repo = MySQLRepository(settings)
         repo.initialize()
         yield repo
     finally:
-        repo.close()
+        if "repo" in locals():
+            repo.close()
+        cleanup_cursor = admin_connection.cursor()
+        cleanup_cursor.execute("DROP DATABASE IF EXISTS luculent_test")
+        cleanup_cursor.close()
+        admin_connection.close()
 
 
 class TestMySQLRepository(RepositoryContract):

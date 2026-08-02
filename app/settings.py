@@ -5,6 +5,9 @@ from pathlib import Path
 from shutil import copyfile
 
 
+DEFAULT_SETTINGS_PATH = Path(__file__).resolve().parent.parent / "settings.txt"
+
+
 @dataclass(frozen=True)
 class Settings:
     database: str = "sqlite"
@@ -18,11 +21,11 @@ class Settings:
     @classmethod
     def from_file(
         cls,
-        path: str | Path = "settings.txt",
+        path: str | Path | None = None,
         *,
         use_defaults_when_missing: bool = False,
     ) -> Settings:
-        settings_path = Path(path)
+        settings_path = Path(path) if path is not None else DEFAULT_SETTINGS_PATH
         if not settings_path.exists():
             example_path = settings_path.with_name("settings.example.txt")
             if example_path.exists():

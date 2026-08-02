@@ -37,8 +37,11 @@ class MySQLRepository(Repository):
             charset="utf8mb4",
             collation="utf8mb4_unicode_ci",
         )
+        self._initialized = False
 
     def initialize(self) -> None:
+        if self._initialized:
+            return
         statements = (
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -116,6 +119,7 @@ class MySQLRepository(Repository):
             for statement in statements:
                 cursor.execute(statement)
             self._connection.commit()
+            self._initialized = True
         finally:
             cursor.close()
 

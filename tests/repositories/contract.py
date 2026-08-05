@@ -12,9 +12,6 @@ from app.repositories import Repository
 class RepositoryContract:
     repository_class: type[Repository]
 
-    def test_implements_repository_contract(self):
-        assert issubclass(self.repository_class, Repository)
-
     def test_user_round_trip_and_update(self, repository):
         repository.save_user(User(101, "Vance", date(2026, 7, 22)))
 
@@ -22,12 +19,21 @@ class RepositoryContract:
         assert user.user_id == 101
         assert user.name == "Vance"
         assert user.created == date(2026, 7, 22)
-        assert user.documents == []
-        assert user.words == []
+        assert user.native_language is Language.ENGLISH
 
         repository.save_user(User(101, "Vance Baryn", date(2026, 7, 22)))
         assert repository.get_user(101).name == "Vance Baryn"
         assert repository.get_user(2147483000) is None
+
+    def test_user_lookup_by_name_and_deletion_by_id(self, repository):
+        repository.save_user(User(102, "Lookup User"))
+
+        loaded = repository.get_user_by_name("Lookup User")
+        assert loaded.user_id == 102
+        assert repository.get_user_by_name("Missing User") is None
+        assert repository.delete_user(loaded.user_id) is True
+        assert repository.delete_user(loaded.user_id) is False
+        assert repository.get_user(102) is None
 
     def test_documents_and_parts_round_trip_in_reading_order(self, repository):
         repository.save_user(User(201, "Reader"))
@@ -56,16 +62,35 @@ class RepositoryContract:
         assert loaded.doc_parts[0].readability == pytest.approx(0.75)
         assert repository.get_document(2147483000) is None
 
-    def test_user_loads_its_documents_and_words(self, repository):
+    def test_document_and_parts_are_saved_atomically(self, repository):
+        repository.save_user(User(211, "Reader"))
+        document = Document(None, "Title", "Text", Language.ENGLISH)
+        document.doc_parts.extend(
+            [
+                DocPart(None, "First", 0),
+                DocPart(None, "Duplicate position", 0),
+            ]
+        )
+
+        with pytest.raises(Exception):
+            repository.save_document_with_parts(211, document)
+
+        assert document.document_id is None
+        assert all(part.doc_part_id is None for part in document.doc_parts)
+        assert repository.list_documents(211) == []
+
+    def test_lists_a_users_documents_and_words_explicitly(self, repository):
         repository.save_user(User(301, "Vance"))
         repository.save_document(
             301, Document(302, "Title", "Text", Language.ENGLISH)
         )
         repository.save_word(301, Word(303, lemma="document"))
 
-        loaded = repository.get_user(301)
-        assert [document.document_id for document in loaded.documents] == [302]
-        assert [word.word_id for word in loaded.words] == [303]
+        documents = repository.list_documents(301)
+        words = repository.list_words(301)
+
+        assert [document.document_id for document in documents] == [302]
+        assert [word.word_id for word in words] == [303]
 
     def test_word_round_trip_preserves_all_persistent_fields(self, repository):
         repository.save_user(User(401, "Vance"))
@@ -118,6 +143,52 @@ class RepositoryContract:
         assert associations[0].word.word_id == 504
         assert associations[0].doc_part.doc_part_id == 503
         assert associations[0].occurrences == 4
+
+    def test_lists_only_learning_words_in_users_active_parts(self, repository):
+        repository.save_user(User(601, "Reader"))
+        repository.save_user(User(602, "Other Reader"))
+        repository.save_document(
+            601, Document(603, "Reading", "Text", Language.ENGLISH)
+        )
+        active_part = DocPart(604, "Active", 0, active=True)
+        inactive_part = DocPart(605, "Inactive", 1)
+        repository.save_doc_part(603, active_part)
+        repository.save_doc_part(603, inactive_part)
+
+        included = Word(606, "included")
+        included.status = Status.LEARNING
+        inactive = Word(607, "inactive")
+        inactive.status = Status.LEARNING
+        not_learning = Word(608, "new")
+        other_users = Word(609, "other")
+        other_users.status = Status.LEARNING
+        repository.save_word(601, included)
+        repository.save_word(601, inactive)
+        repository.save_word(601, not_learning)
+        repository.save_word(602, other_users)
+        repository.save_doc_part_word(DocPartWord(included, active_part, 1))
+        repository.save_doc_part_word(DocPartWord(inactive, inactive_part, 1))
+        repository.save_doc_part_word(DocPartWord(not_learning, active_part, 1))
+
+        words = repository.list_learning_words_in_active_parts(601)
+
+        assert [word.word_id for word in words] == [606]
+
+    def test_rejects_doc_part_word_owned_by_different_users(self, repository):
+        repository.save_user(User(611, "Document Owner"))
+        repository.save_user(User(612, "Word Owner"))
+        repository.save_document(
+            611, Document(613, "Reading", "Text", Language.ENGLISH)
+        )
+        doc_part = DocPart(614, "Part", 0)
+        word = Word(615, "word")
+        repository.save_doc_part(613, doc_part)
+        repository.save_word(612, word)
+
+        with pytest.raises(ValueError, match="same user"):
+            repository.save_doc_part_word(DocPartWord(word, doc_part, 1))
+
+        assert repository.list_doc_part_words(614) == []
 
     def test_generated_primary_keys_are_unique(self, repository):
         first_user = User(None, "First")

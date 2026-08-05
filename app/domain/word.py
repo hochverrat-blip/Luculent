@@ -34,12 +34,12 @@ class Word:
 
         self._doc_part_words: list[DocPartWord] = []
 
+    def _assign_id(self, word_id: int) -> None:
+        self._word_id = word_id
+
     @property
     def word_id(self) -> int | None:
         return self._word_id
-
-    def _assign_id(self, word_id: int) -> None:
-        self._word_id = word_id
 
     @property
     def lemma(self) -> str:

@@ -25,12 +25,12 @@ class Document:
 
         self._doc_parts: list[DocPart] = []
 
+    def _assign_id(self, document_id: int | None) -> None:
+        self._document_id = document_id
+
     @property
     def document_id(self) -> int | None:
         return self._document_id
-
-    def _assign_id(self, document_id: int) -> None:
-        self._document_id = document_id
 
     @property
     def title(self) -> str:
@@ -70,12 +70,12 @@ class DocPart:
 
         self._doc_part_words: list[DocPartWord] = []
 
+    def _assign_id(self, doc_part_id: int | None) -> None:
+        self._doc_part_id = doc_part_id
+
     @property
     def doc_part_id(self) -> int | None:
         return self._doc_part_id
-
-    def _assign_id(self, doc_part_id: int) -> None:
-        self._doc_part_id = doc_part_id
 
     @property
     def text(self) -> str:

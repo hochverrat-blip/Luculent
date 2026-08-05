@@ -1,10 +1,10 @@
-from __future__ import annotations
-
 from datetime import date
 from typing import Optional
 
-from app.domain.document import Document
-from app.domain.word import Word
+from app.domain.enums import Language
+
+
+SUPPORTED_NATIVE_LANGUAGES = frozenset({Language.ENGLISH})
 
 
 class User:
@@ -12,21 +12,22 @@ class User:
         self,
         user_id: int | None,
         name: str,
-        created: Optional[date] = None
+        created: Optional[date] = None,
+        native_language: Language = Language.ENGLISH,
     ):
+        if native_language not in SUPPORTED_NATIVE_LANGUAGES:
+            raise ValueError("Only English is currently supported as a native language")
         self._user_id = user_id
         self._name = name
         self._created = created or date.today()
+        self._native_language = native_language
 
-        self._documents: list[Document] = []
-        self._words: list[Word] = []
+    def _assign_id(self, user_id: int) -> None:
+        self._user_id = user_id
 
     @property
     def user_id(self) -> int | None:
         return self._user_id
-
-    def _assign_id(self, user_id: int) -> None:
-        self._user_id = user_id
 
     @property
     def name(self) -> str:
@@ -37,9 +38,5 @@ class User:
         return self._created
 
     @property
-    def documents(self) -> list[Document]:
-        return self._documents
-
-    @property
-    def words(self) -> list[Word]:
-        return self._words
+    def native_language(self) -> Language:
+        return self._native_language

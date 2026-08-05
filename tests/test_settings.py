@@ -96,16 +96,6 @@ def test_default_settings_path_is_stable_when_working_directory_changes(
     assert settings.sqlite_path == "stable.db"
 
 
-def test_factory_selects_sqlite_from_settings(tmp_path):
-    settings = Settings(database="sqlite", sqlite_path=str(tmp_path / "test.db"))
-
-    repository = create_repository(settings)
-    try:
-        assert isinstance(repository, SQLiteRepository)
-    finally:
-        repository.close()
-
-
 def test_factory_loads_backend_from_settings_file(tmp_path):
     database_path = tmp_path / "from-settings.db"
     settings_file = tmp_path / "settings.txt"

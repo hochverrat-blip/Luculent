@@ -26,8 +26,9 @@ class SQLiteRepository(Repository):
             """
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                created TEXT NOT NULL
+                name TEXT NOT NULL UNIQUE,
+                created TEXT NOT NULL,
+                native_language TEXT NOT NULL DEFAULT 'ENGLISH'
             );
 
             CREATE TABLE IF NOT EXISTS documents (
@@ -88,41 +89,92 @@ class SQLiteRepository(Repository):
         if user.user_id is None:
             user._assign_id(
                 self._execute_insert(
-                    "INSERT INTO users (name, created) VALUES (?, ?)",
-                    (user.name, user.created.isoformat()),
+                    """
+                    INSERT INTO users (name, created, native_language)
+                    VALUES (?, ?, ?)
+                    """,
+                    (
+                        user.name,
+                        user.created.isoformat(),
+                        user.native_language.name,
+                    ),
                 )
             )
             return
         self._connection.execute(
             """
-            INSERT INTO users (user_id, name, created)
-            VALUES (?, ?, ?)
+            INSERT INTO users (user_id, name, created, native_language)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 name = excluded.name,
-                created = excluded.created
+                created = excluded.created,
+                native_language = excluded.native_language
             """,
-            (user.user_id, user.name, user.created.isoformat()),
+            (
+                user.user_id,
+                user.name,
+                user.created.isoformat(),
+                user.native_language.name,
+            ),
         )
         self._connection.commit()
 
     def get_user(self, user_id: int) -> User | None:
         row = self._connection.execute(
-            "SELECT user_id, name, created FROM users WHERE user_id = ?",
+            """
+            SELECT user_id, name, created, native_language
+            FROM users
+            WHERE user_id = ?
+            """,
             (user_id,),
         ).fetchone()
         if row is None:
             return None
 
-        user = User(
+        return User(
             user_id=row["user_id"],
             name=row["name"],
             created=date.fromisoformat(row["created"]),
+            native_language=Language[row["native_language"]],
         )
-        user.documents.extend(self.list_documents(user_id))
-        user.words.extend(self.list_words(user_id))
-        return user
+
+    def get_user_by_name(self, name: str) -> User | None:
+        row = self._connection.execute(
+            "SELECT user_id FROM users WHERE name = ?",
+            (name,),
+        ).fetchone()
+        return None if row is None else self.get_user(row["user_id"])
+
+    def delete_user(self, user_id: int) -> bool:
+        cursor = self._connection.execute(
+            "DELETE FROM users WHERE user_id = ?",
+            (user_id,),
+        )
+        self._connection.commit()
+        return cursor.rowcount > 0
 
     def save_document(self, user_id: int, document: Document) -> None:
+        self._save_document(user_id, document, commit=True)
+
+    def save_document_with_parts(self, user_id: int, document: Document) -> None:
+        document_was_new = document.document_id is None
+        new_parts = [part for part in document.doc_parts if part.doc_part_id is None]
+        try:
+            self._save_document(user_id, document, commit=False)
+            for doc_part in document.doc_parts:
+                self._save_doc_part(document.document_id, doc_part, commit=False)
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            if document_was_new:
+                document._assign_id(None)
+            for doc_part in new_parts:
+                doc_part._assign_id(None)
+            raise
+
+    def _save_document(
+        self, user_id: int, document: Document, *, commit: bool
+    ) -> None:
         if document.document_id is None:
             document._assign_id(
                 self._execute_insert(
@@ -137,6 +189,7 @@ class SQLiteRepository(Repository):
                         document.language.name,
                         document.imported.isoformat(),
                     ),
+                    commit=commit,
                 )
             )
             return
@@ -162,7 +215,8 @@ class SQLiteRepository(Repository):
                 document.imported.isoformat(),
             ),
         )
-        self._connection.commit()
+        if commit:
+            self._connection.commit()
 
     def get_document(self, document_id: int) -> Document | None:
         row = self._connection.execute(
@@ -190,6 +244,11 @@ class SQLiteRepository(Repository):
         return [self._document_from_row(row) for row in rows]
 
     def save_doc_part(self, document_id: int, doc_part: DocPart) -> None:
+        self._save_doc_part(document_id, doc_part, commit=True)
+
+    def _save_doc_part(
+        self, document_id: int, doc_part: DocPart, *, commit: bool
+    ) -> None:
         if doc_part.doc_part_id is None:
             doc_part._assign_id(
                 self._execute_insert(
@@ -206,6 +265,7 @@ class SQLiteRepository(Repository):
                         doc_part.readability,
                         int(doc_part.active),
                     ),
+                    commit=commit,
                 )
             )
             return
@@ -231,7 +291,8 @@ class SQLiteRepository(Repository):
                 int(doc_part.active),
             ),
         )
-        self._connection.commit()
+        if commit:
+            self._connection.commit()
 
     def list_doc_parts(self, document_id: int) -> list[DocPart]:
         rows = self._connection.execute(
@@ -333,9 +394,40 @@ class SQLiteRepository(Repository):
         ).fetchall()
         return [self._word_from_row(row) for row in rows]
 
+    def list_learning_words_in_active_parts(self, user_id: int) -> list[Word]:
+        rows = self._connection.execute(
+            """
+            SELECT DISTINCT w.*
+            FROM words AS w
+            INNER JOIN doc_part_words AS dpw ON dpw.word_id = w.word_id
+            INNER JOIN doc_parts AS dp ON dp.doc_part_id = dpw.doc_part_id
+            INNER JOIN documents AS d ON d.document_id = dp.document_id
+            WHERE w.user_id = ?
+              AND d.user_id = ?
+              AND w.status = ?
+              AND dp.active = 1
+            ORDER BY w.word_id
+            """,
+            (user_id, user_id, Status.LEARNING.name),
+        ).fetchall()
+        return [self._word_from_row(row) for row in rows]
+
     def save_doc_part_word(self, association: DocPartWord) -> None:
         if association.word.word_id is None or association.doc_part.doc_part_id is None:
             raise ValueError("Word and document part must be saved first")
+        ownership = self._connection.execute(
+            """
+            SELECT 1
+            FROM words AS w
+            INNER JOIN doc_parts AS dp ON dp.doc_part_id = ?
+            INNER JOIN documents AS d ON d.document_id = dp.document_id
+            WHERE w.word_id = ?
+              AND w.user_id = d.user_id
+            """,
+            (association.doc_part.doc_part_id, association.word.word_id),
+        ).fetchone()
+        if ownership is None:
+            raise ValueError("Word and document part must belong to the same user")
         self._connection.execute(
             """
             INSERT INTO doc_part_words (word_id, doc_part_id, occurrences)
@@ -376,9 +468,16 @@ class SQLiteRepository(Repository):
     def close(self) -> None:
         self._connection.close()
 
-    def _execute_insert(self, sql: str, parameters: tuple[object, ...]) -> int:
+    def _execute_insert(
+        self,
+        sql: str,
+        parameters: tuple[object, ...],
+        *,
+        commit: bool = True,
+    ) -> int:
         cursor = self._connection.execute(sql, parameters)
-        self._connection.commit()
+        if commit:
+            self._connection.commit()
         return cursor.lastrowid
 
     def _document_from_row(self, row: sqlite3.Row) -> Document:

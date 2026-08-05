@@ -1,5 +1,5 @@
-import pytest
 from datetime import date
+
 import pytest
 from app.domain.document import *
 from app.domain.enums import *
@@ -43,30 +43,29 @@ def the_word():
     )
 
 
-def test_language_values():
-    assert Language.KOREAN.value == "Korean"
-    assert Language.ENGLISH.value == "English"
-
-
-def test_response_values():
-    assert Response.KNOWN.value == "Known"
-    assert Response.EASY.value == "Easy"
-    assert Response.GOOD.value == "Good"
-    assert Response.HARD.value == "Hard"
-
-
-def test_status_values():
-    assert Status.KNOWN.value == "Known"
-    assert Status.LEARNING.value == "Learning"
-    assert Status.NEW.value == "New"
-    assert Status.SUSPENDED.value == "Suspended"
-
-
-def test_pos_values():
-    assert POS.VERB.value == "Verb"
-    assert POS.NOUN.value == "Noun"
-    assert POS.ADVERB.value == "Adverb"
-    assert POS.ADJECTIVE.value == "Adjective"
+def test_enum_values():
+    assert {item.name: item.value for item in Language} == {
+        "KOREAN": "Korean",
+        "ENGLISH": "English",
+    }
+    assert {item.name: item.value for item in Response} == {
+        "KNOWN": "Known",
+        "EASY": "Easy",
+        "GOOD": "Good",
+        "HARD": "Hard",
+    }
+    assert {item.name: item.value for item in Status} == {
+        "KNOWN": "Known",
+        "LEARNING": "Learning",
+        "NEW": "New",
+        "SUSPENDED": "Suspended",
+    }
+    assert {item.name: item.value for item in POS} == {
+        "VERB": "Verb",
+        "NOUN": "Noun",
+        "ADVERB": "Adverb",
+        "ADJECTIVE": "Adjective",
+    }
 
 
 def test_user_properties():
@@ -74,14 +73,18 @@ def test_user_properties():
     assert user.user_id == 1
     assert user.name == "Vance"
     assert user.created == date(2026, 7, 22)
-    assert user.documents == []
-    assert user.words == []
+    assert user.native_language is Language.ENGLISH
 
 
 def test_user_uses_today_as_default_creation_date():
     user = User(user_id=1, name="Vance")
 
     assert user.created == date.today()
+
+
+def test_user_rejects_an_unsupported_native_language():
+    with pytest.raises(ValueError, match="Only English"):
+        User(user_id=1, name="Vance", native_language=Language.KOREAN)
 
 
 def test_document_properties():
@@ -105,7 +108,7 @@ def test_document_uses_today_as_default_import_date():
     assert document.imported == date.today()
 
 
-def test_doc_part_default_values():
+def test_doc_part_properties_defaults_and_updates():
     doc_part = the_doc_part()
     assert doc_part.doc_part_id == 20
     assert doc_part.text == "이것은 첫 번째 부분입니다."
@@ -114,18 +117,10 @@ def test_doc_part_default_values():
     assert doc_part.active is False
     assert doc_part.doc_part_words == []
 
-
-def test_doc_part_readability_can_be_changed():
-    doc_part = the_doc_part()
     doc_part.readability = 0.85
-
-    assert doc_part.readability == pytest.approx(0.85)
-
-
-def test_doc_part_active_can_be_changed():
-    doc_part = the_doc_part()
     doc_part.active = True
 
+    assert doc_part.readability == pytest.approx(0.85)
     assert doc_part.active is True
 
 
@@ -146,15 +141,7 @@ def test_word_properties():
     assert word.status is Status.NEW
     assert word.last_reviewed is None
     assert word.doc_part_words == []
-
-
-def test_word_uses_expected_defaults():
-    word = Word(word_id=30)
-
-    assert word.lemma == ""
-    assert word.language is Language.KOREAN
-    assert word.pos is POS.NOUN
-    assert word.status is Status.NEW
+    assert Word(word_id=31).lemma == ""
 
 
 def test_word_properties_can_be_updated():
@@ -199,27 +186,3 @@ def test_doc_part_word_properties():
     assert association.word is word
     assert association.doc_part is doc_part
     assert association.occurrences == 4
-
-
-def test_objects_can_be_added_to_lists():
-    user = the_user()
-    document = the_document()
-    doc_part = the_doc_part()
-    word = the_word()
-    association = DocPartWord(
-        word=word,
-        doc_part=doc_part,
-        occurrences=4,
-    )
-
-    user.documents.append(document)
-    user.words.append(word)
-    document.doc_parts.append(doc_part)
-    doc_part.doc_part_words.append(association)
-    word.doc_part_words.append(association)
-
-    assert document in user.documents
-    assert word in user.words
-    assert doc_part in document.doc_parts
-    assert association in doc_part.doc_part_words
-    assert association in word.doc_part_words

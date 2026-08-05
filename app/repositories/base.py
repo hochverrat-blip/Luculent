@@ -23,8 +23,20 @@ class Repository(ABC):
         """Return a user, or None when the ID does not exist"""
 
     @abstractmethod
+    def get_user_by_name(self, name: str) -> User | None:
+        """Return the user with the given name, or None when it does not exist"""
+
+    @abstractmethod
+    def delete_user(self, user_id: int) -> bool:
+        """Delete the user with the given ID and return whether it existed"""
+
+    @abstractmethod
     def save_document(self, user_id: int, document: Document) -> None:
         """Insert or update a document, assigning a generated ID when needed"""
+
+    @abstractmethod
+    def save_document_with_parts(self, user_id: int, document: Document) -> None:
+        """Save a document and its parts as one transaction"""
 
     @abstractmethod
     def get_document(self, document_id: int) -> Document | None:
@@ -53,6 +65,10 @@ class Repository(ABC):
     @abstractmethod
     def list_words(self, user_id: int) -> list[Word]:
         """Return a user's words in ID order"""
+
+    @abstractmethod
+    def list_learning_words_in_active_parts(self, user_id: int) -> list[Word]:
+        """Return a user's learning words found in active document parts"""
 
     @abstractmethod
     def save_doc_part_word(self, association: DocPartWord) -> None:

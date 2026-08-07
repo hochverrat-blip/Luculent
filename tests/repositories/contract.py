@@ -3,9 +3,9 @@ from datetime import date
 import pytest
 
 from app.domain.document import DocPart, Document
-from app.domain.enums import Language, POS, Status
+from app.domain.enums import Language, MeaningFrequency, MeaningLabel, POS, Status
 from app.domain.user import User
-from app.domain.word import DocPartWord, Word
+from app.domain.word import DocPartWord, Word, WordMeaning
 from app.repositories import Repository
 
 
@@ -79,6 +79,32 @@ class RepositoryContract:
         assert all(part.doc_part_id is None for part in document.doc_parts)
         assert repository.list_documents(211) == []
 
+    def test_document_import_rolls_back_every_entity(self, repository):
+        repository.save_user(User(221, "Document Owner"))
+        repository.save_user(User(222, "Word Owner"))
+        other_users_word = Word(223, "word")
+        repository.save_word(222, other_users_word)
+        document = Document(None, "Title", "Word.", Language.ENGLISH)
+        doc_part = DocPart(None, "Word.", 0)
+        new_word = Word(None, "new")
+        new_meaning = WordMeaning(None, gloss="new meaning")
+        new_word.meanings.append(new_meaning)
+        document.doc_parts.append(doc_part)
+        associations = [
+            DocPartWord(new_word, doc_part, 1),
+            DocPartWord(other_users_word, doc_part, 1),
+        ]
+
+        with pytest.raises(ValueError, match="same user"):
+            repository.save_document_import(221, document, associations)
+
+        assert document.document_id is None
+        assert doc_part.doc_part_id is None
+        assert new_word.word_id is None
+        assert new_meaning.meaning_id is None
+        assert repository.list_documents(221) == []
+        assert repository.list_words(221) == []
+
     def test_lists_a_users_documents_and_words_explicitly(self, repository):
         repository.save_user(User(301, "Vance"))
         repository.save_document(
@@ -97,12 +123,9 @@ class RepositoryContract:
         word = Word(
             402,
             lemma="문서",
-            english_definition="document",
             language=Language.KOREAN,
             pos=POS.NOUN,
         )
-        word.korean_definition = "글이나 기록을 담은 것"
-        word.gloss = "document"
         word.due = date(2026, 7, 25)
         word.difficulty = 4.5
         word.stability = 8.0
@@ -114,9 +137,6 @@ class RepositoryContract:
         loaded = repository.get_word(402)
 
         assert loaded.lemma == "문서"
-        assert loaded.korean_definition == "글이나 기록을 담은 것"
-        assert loaded.english_definition == "document"
-        assert loaded.gloss == "document"
         assert loaded.due == date(2026, 7, 25)
         assert loaded.difficulty == pytest.approx(4.5)
         assert loaded.stability == pytest.approx(8.0)
@@ -126,6 +146,69 @@ class RepositoryContract:
         assert loaded.pos is POS.NOUN
         assert loaded.language is Language.KOREAN
         assert repository.get_word(2147483000) is None
+        assert [
+            item.word_id
+            for item in repository.list_words_by_lemmas(
+                401, Language.KOREAN, {"문서", "없는단어"}
+            )
+        ] == [402]
+        assert repository.list_words_by_lemmas(401, Language.ENGLISH, {"문서"}) == []
+        assert repository.list_words_by_lemmas(401, Language.KOREAN, set()) == []
+
+        verb = Word(403, lemma="문서", language=Language.KOREAN, pos=POS.VERB)
+        repository.save_word(401, verb)
+        matches = repository.list_words_by_lemmas(
+            401, Language.KOREAN, {"문서"}
+        )
+        assert {(item.word_id, item.pos) for item in matches} == {
+            (402, POS.NOUN),
+            (403, POS.VERB),
+        }
+
+    def test_word_meanings_round_trip_in_display_order(self, repository):
+        repository.save_user(User(411, "Vance"))
+        word = Word(412, lemma="배", language=Language.KOREAN, pos=POS.NOUN)
+        repository.save_word(411, word)
+        rare = WordMeaning(
+            414,
+            korean_definition="물을 건너는 운송 수단",
+            english_definition="a vessel used on water",
+            gloss="boat",
+            frequency=MeaningFrequency.RARE,
+            labels={MeaningLabel.ARCHAIC, MeaningLabel.TECHNICAL},
+            display_order=2,
+        )
+        common = WordMeaning(
+            413,
+            korean_definition="사람의 몸통 가운데 부분",
+            english_definition="the abdomen",
+            gloss="stomach",
+            display_order=1,
+        )
+
+        repository.save_word_meaning(412, rare)
+        repository.save_word_meaning(412, common)
+
+        loaded = repository.get_word(412)
+        assert [meaning.meaning_id for meaning in loaded.meanings] == [413, 414]
+        assert loaded.meanings[0].frequency is MeaningFrequency.COMMON
+        assert loaded.meanings[0].labels == set()
+        assert loaded.meanings[1].korean_definition == "물을 건너는 운송 수단"
+        assert loaded.meanings[1].english_definition == "a vessel used on water"
+        assert loaded.meanings[1].gloss == "boat"
+        assert loaded.meanings[1].frequency is MeaningFrequency.RARE
+        assert loaded.meanings[1].labels == {
+            MeaningLabel.ARCHAIC,
+            MeaningLabel.TECHNICAL,
+        }
+
+        rare.gloss = "ship"
+        rare.labels.remove(MeaningLabel.ARCHAIC)
+        repository.save_word_meaning(412, rare)
+
+        updated = repository.list_word_meanings(412)[1]
+        assert updated.gloss == "ship"
+        assert updated.labels == {MeaningLabel.TECHNICAL}
 
     def test_doc_part_word_round_trip(self, repository):
         repository.save_user(User(501, "Vance"))
@@ -133,7 +216,7 @@ class RepositoryContract:
             501, Document(502, "Title", "Text", Language.KOREAN)
         )
         doc_part = DocPart(503, "문서가 있습니다.", 0)
-        word = Word(504, lemma="문서", english_definition="document")
+        word = Word(504, lemma="문서")
         repository.save_doc_part(502, doc_part)
         repository.save_word(501, word)
         repository.save_doc_part_word(DocPartWord(word, doc_part, 4))
@@ -211,11 +294,17 @@ class RepositoryContract:
         repository.save_word(first_user.user_id, first_word)
         repository.save_word(first_user.user_id, second_word)
 
+        first_meaning = WordMeaning(None, gloss="first")
+        second_meaning = WordMeaning(None, gloss="second")
+        repository.save_word_meaning(first_word.word_id, first_meaning)
+        repository.save_word_meaning(first_word.word_id, second_meaning)
+
         for first_id, second_id in (
             (first_user.user_id, second_user.user_id),
             (first_document.document_id, second_document.document_id),
             (first_part.doc_part_id, second_part.doc_part_id),
             (first_word.word_id, second_word.word_id),
+            (first_meaning.meaning_id, second_meaning.meaning_id),
         ):
             assert isinstance(first_id, int)
             assert isinstance(second_id, int)

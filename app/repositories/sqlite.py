@@ -5,9 +5,9 @@ from datetime import date
 from pathlib import Path
 
 from app.domain.document import DocPart, Document
-from app.domain.enums import Language, POS, Status
+from app.domain.enums import Language, MeaningFrequency, MeaningLabel, POS, Status
 from app.domain.user import User
-from app.domain.word import DocPartWord, Word
+from app.domain.word import DocPartWord, Word, WordMeaning
 from app.repositories.base import Repository
 
 
@@ -57,9 +57,6 @@ class SQLiteRepository(Repository):
                 word_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
                 lemma TEXT NOT NULL,
-                korean_definition TEXT NOT NULL,
-                english_definition TEXT NOT NULL,
-                gloss TEXT NOT NULL,
                 due TEXT,
                 difficulty REAL NOT NULL DEFAULT 0.0,
                 stability REAL NOT NULL DEFAULT 0.0,
@@ -68,7 +65,27 @@ class SQLiteRepository(Repository):
                 last_reviewed TEXT,
                 pos TEXT NOT NULL,
                 language TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+                UNIQUE (user_id, language, lemma, pos)
+            );
+
+            CREATE TABLE IF NOT EXISTS word_meanings (
+                meaning_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                word_id INTEGER NOT NULL,
+                korean_definition TEXT NOT NULL,
+                english_definition TEXT NOT NULL,
+                gloss TEXT NOT NULL,
+                frequency TEXT NOT NULL,
+                display_order INTEGER NOT NULL,
+                FOREIGN KEY (word_id) REFERENCES words(word_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS word_meaning_labels (
+                meaning_id INTEGER NOT NULL,
+                label TEXT NOT NULL,
+                PRIMARY KEY (meaning_id, label),
+                FOREIGN KEY (meaning_id)
+                    REFERENCES word_meanings(meaning_id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS doc_part_words (
@@ -170,6 +187,50 @@ class SQLiteRepository(Repository):
                 document._assign_id(None)
             for doc_part in new_parts:
                 doc_part._assign_id(None)
+            raise
+
+    def save_document_import(
+        self,
+        user_id: int,
+        document: Document,
+        associations: list[DocPartWord],
+    ) -> None:
+        document_was_new = document.document_id is None
+        new_parts = [part for part in document.doc_parts if part.doc_part_id is None]
+        new_words = list(
+            {
+                id(association.word): association.word
+                for association in associations
+                if association.word.word_id is None
+            }.values()
+        )
+        new_meanings = [
+            meaning
+            for word in new_words
+            for meaning in word.meanings
+            if meaning.meaning_id is None
+        ]
+        try:
+            self._save_document(user_id, document, commit=False)
+            for doc_part in document.doc_parts:
+                self._save_doc_part(document.document_id, doc_part, commit=False)
+            for word in new_words:
+                self._save_word(user_id, word, commit=False)
+                for meaning in word.meanings:
+                    self._save_word_meaning(word.word_id, meaning, commit=False)
+            for association in associations:
+                self._save_doc_part_word(association, commit=False)
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            if document_was_new:
+                document._assign_id(None)
+            for doc_part in new_parts:
+                doc_part._assign_id(None)
+            for word in new_words:
+                word._assign_id(None)
+            for meaning in new_meanings:
+                meaning._assign_id(None)
             raise
 
     def _save_document(
@@ -307,23 +368,22 @@ class SQLiteRepository(Repository):
         return [self._doc_part_from_row(row) for row in rows]
 
     def save_word(self, user_id: int, word: Word) -> None:
+        self._save_word(user_id, word, commit=True)
+
+    def _save_word(self, user_id: int, word: Word, *, commit: bool) -> None:
         if word.word_id is None:
             word._assign_id(
                 self._execute_insert(
                     """
                     INSERT INTO words (
-                        user_id, lemma, korean_definition, english_definition,
-                        gloss, due, difficulty, stability, image_path, status,
-                        last_reviewed, pos, language
+                        user_id, lemma, due, difficulty, stability, image_path,
+                        status, last_reviewed, pos, language
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         user_id,
                         word.lemma,
-                        word.korean_definition,
-                        word.english_definition,
-                        word.gloss,
                         self._date_to_text(word.due),
                         word.difficulty,
                         word.stability,
@@ -333,23 +393,20 @@ class SQLiteRepository(Repository):
                         word.pos.name,
                         word.language.name,
                     ),
+                    commit=commit,
                 )
             )
             return
         self._connection.execute(
             """
             INSERT INTO words (
-                word_id, user_id, lemma, korean_definition,
-                english_definition, gloss, due, difficulty, stability,
+                word_id, user_id, lemma, due, difficulty, stability,
                 image_path, status, last_reviewed, pos, language
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(word_id) DO UPDATE SET
                 user_id = excluded.user_id,
                 lemma = excluded.lemma,
-                korean_definition = excluded.korean_definition,
-                english_definition = excluded.english_definition,
-                gloss = excluded.gloss,
                 due = excluded.due,
                 difficulty = excluded.difficulty,
                 stability = excluded.stability,
@@ -363,9 +420,6 @@ class SQLiteRepository(Repository):
                 word.word_id,
                 user_id,
                 word.lemma,
-                word.korean_definition,
-                word.english_definition,
-                word.gloss,
                 self._date_to_text(word.due),
                 word.difficulty,
                 word.stability,
@@ -376,7 +430,8 @@ class SQLiteRepository(Repository):
                 word.language.name,
             ),
         )
-        self._connection.commit()
+        if commit:
+            self._connection.commit()
 
     def get_word(self, word_id: int) -> Word | None:
         row = self._connection.execute(
@@ -393,6 +448,117 @@ class SQLiteRepository(Repository):
             (user_id,),
         ).fetchall()
         return [self._word_from_row(row) for row in rows]
+
+    def list_words_by_lemmas(
+        self, user_id: int, language: Language, lemmas: set[str]
+    ) -> list[Word]:
+        rows: list[sqlite3.Row] = []
+        ordered_lemmas = sorted(lemmas)
+        for start in range(0, len(ordered_lemmas), 500):
+            chunk = ordered_lemmas[start : start + 500]
+            placeholders = ", ".join("?" for _ in chunk)
+            rows.extend(
+                self._connection.execute(
+                    f"""
+                    SELECT *
+                    FROM words
+                    WHERE user_id = ?
+                      AND language = ?
+                      AND lemma IN ({placeholders})
+                    """,
+                    (user_id, language.name, *chunk),
+                ).fetchall()
+            )
+        rows.sort(key=lambda row: row["word_id"])
+        return [self._word_from_row(row) for row in rows]
+
+    def save_word_meaning(self, word_id: int, meaning: WordMeaning) -> None:
+        self._save_word_meaning(word_id, meaning, commit=True)
+
+    def _save_word_meaning(
+        self, word_id: int, meaning: WordMeaning, *, commit: bool
+    ) -> None:
+        if meaning.meaning_id is None:
+            meaning._assign_id(
+                self._execute_insert(
+                    """
+                    INSERT INTO word_meanings (
+                        word_id, korean_definition, english_definition, gloss,
+                        frequency, display_order
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        word_id,
+                        meaning.korean_definition,
+                        meaning.english_definition,
+                        meaning.gloss,
+                        meaning.frequency.name,
+                        meaning.display_order,
+                    ),
+                    commit=False,
+                )
+            )
+        else:
+            self._connection.execute(
+                """
+                INSERT INTO word_meanings (
+                    meaning_id, word_id, korean_definition, english_definition,
+                    gloss, frequency, display_order
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(meaning_id) DO UPDATE SET
+                    word_id = excluded.word_id,
+                    korean_definition = excluded.korean_definition,
+                    english_definition = excluded.english_definition,
+                    gloss = excluded.gloss,
+                    frequency = excluded.frequency,
+                    display_order = excluded.display_order
+                """,
+                (
+                    meaning.meaning_id,
+                    word_id,
+                    meaning.korean_definition,
+                    meaning.english_definition,
+                    meaning.gloss,
+                    meaning.frequency.name,
+                    meaning.display_order,
+                ),
+            )
+        self._connection.execute(
+            "DELETE FROM word_meaning_labels WHERE meaning_id = ?",
+            (meaning.meaning_id,),
+        )
+        self._connection.executemany(
+            "INSERT INTO word_meaning_labels (meaning_id, label) VALUES (?, ?)",
+            ((meaning.meaning_id, label.name) for label in meaning.labels),
+        )
+        if commit:
+            self._connection.commit()
+
+    def list_word_meanings(self, word_id: int) -> list[WordMeaning]:
+        rows = self._connection.execute(
+            """
+            SELECT *
+            FROM word_meanings
+            WHERE word_id = ?
+            ORDER BY display_order, meaning_id
+            """,
+            (word_id,),
+        ).fetchall()
+        meanings = [self._word_meaning_from_row(row) for row in rows]
+        for meaning in meanings:
+            labels = self._connection.execute(
+                """
+                SELECT label
+                FROM word_meaning_labels
+                WHERE meaning_id = ?
+                ORDER BY label
+                """,
+                (meaning.meaning_id,),
+            ).fetchall()
+            meaning.labels.update(MeaningLabel[row["label"]] for row in labels)
+        return meanings
 
     def list_learning_words_in_active_parts(self, user_id: int) -> list[Word]:
         rows = self._connection.execute(
@@ -413,6 +579,11 @@ class SQLiteRepository(Repository):
         return [self._word_from_row(row) for row in rows]
 
     def save_doc_part_word(self, association: DocPartWord) -> None:
+        self._save_doc_part_word(association, commit=True)
+
+    def _save_doc_part_word(
+        self, association: DocPartWord, *, commit: bool
+    ) -> None:
         if association.word.word_id is None or association.doc_part.doc_part_id is None:
             raise ValueError("Word and document part must be saved first")
         ownership = self._connection.execute(
@@ -441,7 +612,8 @@ class SQLiteRepository(Repository):
                 association.occurrences,
             ),
         )
-        self._connection.commit()
+        if commit:
+            self._connection.commit()
 
     def list_doc_part_words(self, doc_part_id: int) -> list[DocPartWord]:
         rows = self._connection.execute(
@@ -501,24 +673,32 @@ class SQLiteRepository(Repository):
             active=bool(row["active"]),
         )
 
-    @staticmethod
-    def _word_from_row(row: sqlite3.Row) -> Word:
+    def _word_from_row(self, row: sqlite3.Row) -> Word:
         word = Word(
             word_id=row["word_id"],
             lemma=row["lemma"],
-            english_definition=row["english_definition"],
             language=Language[row["language"]],
             pos=POS[row["pos"]],
         )
-        word.korean_definition = row["korean_definition"]
-        word.gloss = row["gloss"]
         word.due = SQLiteRepository._text_to_date(row["due"])
         word.difficulty = row["difficulty"]
         word.stability = row["stability"]
         word.image_path = row["image_path"]
         word.status = Status[row["status"]]
         word.last_reviewed = SQLiteRepository._text_to_date(row["last_reviewed"])
+        word.meanings.extend(self.list_word_meanings(word.word_id))
         return word
+
+    @staticmethod
+    def _word_meaning_from_row(row: sqlite3.Row) -> WordMeaning:
+        return WordMeaning(
+            meaning_id=row["meaning_id"],
+            korean_definition=row["korean_definition"],
+            english_definition=row["english_definition"],
+            gloss=row["gloss"],
+            frequency=MeaningFrequency[row["frequency"]],
+            display_order=row["display_order"],
+        )
 
     @staticmethod
     def _date_to_text(value: date | None) -> str | None:

@@ -3,8 +3,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from app.domain.document import DocPart, Document
+from app.domain.enums import Language
 from app.domain.user import User
-from app.domain.word import DocPartWord, Word
+from app.domain.word import DocPartWord, Word, WordMeaning
 
 
 class Repository(ABC):
@@ -39,6 +40,15 @@ class Repository(ABC):
         """Save a document and its parts as one transaction"""
 
     @abstractmethod
+    def save_document_import(
+        self,
+        user_id: int,
+        document: Document,
+        associations: list[DocPartWord],
+    ) -> None:
+        """Save an imported document, words, and associations as one transaction"""
+
+    @abstractmethod
     def get_document(self, document_id: int) -> Document | None:
         """Return a document, or None when the ID does not exist"""
 
@@ -65,6 +75,20 @@ class Repository(ABC):
     @abstractmethod
     def list_words(self, user_id: int) -> list[Word]:
         """Return a user's words in ID order"""
+
+    @abstractmethod
+    def list_words_by_lemmas(
+        self, user_id: int, language: Language, lemmas: set[str]
+    ) -> list[Word]:
+        """Return a user's words matching the language and lemmas"""
+
+    @abstractmethod
+    def save_word_meaning(self, word_id: int, meaning: WordMeaning) -> None:
+        """Insert or update a meaning and its labels"""
+
+    @abstractmethod
+    def list_word_meanings(self, word_id: int) -> list[WordMeaning]:
+        """Return a word's meanings in display order"""
 
     @abstractmethod
     def list_learning_words_in_active_parts(self, user_id: int) -> list[Word]:

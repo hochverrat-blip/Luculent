@@ -37,7 +37,6 @@ def the_word():
     return Word(
         word_id=30,
         lemma="문서",
-        english_definition="document",
         language=Language.KOREAN,
         pos=POS.NOUN,
     )
@@ -65,6 +64,14 @@ def test_enum_values():
         "NOUN": "Noun",
         "ADVERB": "Adverb",
         "ADJECTIVE": "Adjective",
+    }
+    assert {item.name: item.value for item in MeaningFrequency} == {
+        "COMMON": "Common",
+        "RARE": "Rare",
+    }
+    assert {item.name: item.value for item in MeaningLabel} == {
+        "ARCHAIC": "Archaic",
+        "TECHNICAL": "Technical",
     }
 
 
@@ -128,11 +135,9 @@ def test_word_properties():
     word = the_word()
     assert word.word_id == 30
     assert word.lemma == "문서"
-    assert word.korean_definition == ""
-    assert word.english_definition == "document"
-    assert word.gloss == ""
     assert word.language is Language.KOREAN
     assert word.pos is POS.NOUN
+    assert word.meanings == []
 
     assert word.due is None
     assert word.difficulty == 0.0
@@ -150,9 +155,6 @@ def test_word_properties_can_be_updated():
     due_date = date(2026, 7, 25)
 
     word.lemma = "문서들"
-    word.english_definition = "documents"
-    word.korean_definition = "기록을 담은 것"
-    word.gloss = "document"
     word.due = due_date
     word.difficulty = 4.5
     word.stability = 8.0
@@ -162,9 +164,6 @@ def test_word_properties_can_be_updated():
     word.pos = POS.NOUN
 
     assert word.lemma == "문서들"
-    assert word.english_definition == "documents"
-    assert word.korean_definition == "기록을 담은 것"
-    assert word.gloss == "document"
     assert word.due == due_date
     assert word.difficulty == pytest.approx(4.5)
     assert word.stability == pytest.approx(8.0)
@@ -172,6 +171,40 @@ def test_word_properties_can_be_updated():
     assert word.status is Status.LEARNING
     assert word.last_reviewed == review_date
     assert word.pos is POS.NOUN
+
+
+def test_word_meaning_properties_and_updates():
+    meaning = WordMeaning(
+        meaning_id=40,
+        korean_definition="기록을 담은 것",
+        english_definition="a written record",
+        gloss="document",
+        frequency=MeaningFrequency.RARE,
+        labels={MeaningLabel.TECHNICAL},
+        display_order=2,
+    )
+
+    assert meaning.meaning_id == 40
+    assert meaning.korean_definition == "기록을 담은 것"
+    assert meaning.english_definition == "a written record"
+    assert meaning.gloss == "document"
+    assert meaning.frequency is MeaningFrequency.RARE
+    assert meaning.labels == {MeaningLabel.TECHNICAL}
+    assert meaning.display_order == 2
+
+    meaning.korean_definition = "기록"
+    meaning.english_definition = "record"
+    meaning.gloss = "record"
+    meaning.frequency = MeaningFrequency.COMMON
+    meaning.labels.add(MeaningLabel.ARCHAIC)
+    meaning.display_order = 1
+
+    assert meaning.korean_definition == "기록"
+    assert meaning.english_definition == "record"
+    assert meaning.gloss == "record"
+    assert meaning.frequency is MeaningFrequency.COMMON
+    assert meaning.labels == {MeaningLabel.TECHNICAL, MeaningLabel.ARCHAIC}
+    assert meaning.display_order == 1
 
 
 def test_doc_part_word_properties():

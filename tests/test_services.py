@@ -14,29 +14,37 @@ from app.domain import (
     Word,
     WordMeaning,
 )
-from app.lexicon import Lexicon, LexiconManager
+from app.lexicon import LexiconManager
 from app.scraper import ScrapedPage, Scraper
 from app.services import DocumentService, UserService, WordService
 
 
-class FakeLexicon(Lexicon):
-    def get_meanings(self, lemma, language, pos):
-        return [
-            WordMeaning(
-                None,
-                korean_definition=f"{lemma}의 뜻",
-                english_definition=f"The meaning of {lemma}",
-                gloss=f"meaning of {lemma}",
-            )
-        ]
-
-
 @pytest.fixture(autouse=True)
 def use_fake_lexicon(monkeypatch):
+    def install(repository, language):
+        source = f"test-{language.name}"
+        if repository.get_lexicon_version(source) is not None:
+            return
+        meanings = []
+        if language is Language.ENGLISH:
+            meanings.append(
+                (
+                    "cat",
+                    language,
+                    POS.NOUN,
+                    WordMeaning(
+                        None,
+                        english_definition="The meaning of cat",
+                        gloss="meaning of cat",
+                    ),
+                )
+            )
+        repository.install_lexicon(source, "1", "test", meanings)
+
     monkeypatch.setattr(
         document_service_module,
-        "create_lexicon",
-        lambda language: FakeLexicon(),
+        "ensure_lexicon",
+        install,
     )
 
 
@@ -366,8 +374,8 @@ def test_import_rejects_english_without_saving_partial_data(
     )
     monkeypatch.setattr(
         document_service_module,
-        "create_lexicon",
-        lambda language: LexiconManager(tmp_path).get_lexicon(language),
+        "ensure_lexicon",
+        LexiconManager().ensure_installed,
     )
     path = tmp_path / "english.txt"
     path.write_text("Cats sleep.", encoding="utf-8")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterable
 from datetime import date
 from pathlib import Path
 
@@ -53,31 +54,47 @@ class SQLiteRepository(Repository):
                 UNIQUE (document_id, position)
             );
 
+            CREATE TABLE IF NOT EXISTS lexicon_entries (
+                lexicon_entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lemma TEXT NOT NULL,
+                language TEXT NOT NULL,
+                pos TEXT NOT NULL,
+                UNIQUE (lemma, language, pos)
+            );
+
+            CREATE TABLE IF NOT EXISTS lexicon_metadata (
+                source TEXT PRIMARY KEY,
+                version TEXT NOT NULL,
+                checksum TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS words (
                 word_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
-                lemma TEXT NOT NULL,
+                lexicon_entry_id INTEGER NOT NULL,
                 due TEXT,
                 difficulty REAL NOT NULL DEFAULT 0.0,
                 stability REAL NOT NULL DEFAULT 0.0,
                 image_path TEXT,
                 status TEXT NOT NULL,
                 last_reviewed TEXT,
-                pos TEXT NOT NULL,
-                language TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-                UNIQUE (user_id, language, lemma, pos)
+                FOREIGN KEY (lexicon_entry_id)
+                    REFERENCES lexicon_entries(lexicon_entry_id),
+                UNIQUE (user_id, lexicon_entry_id)
             );
 
             CREATE TABLE IF NOT EXISTS word_meanings (
                 meaning_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                word_id INTEGER NOT NULL,
+                lexicon_entry_id INTEGER NOT NULL,
+                source TEXT NOT NULL DEFAULT 'USER',
                 korean_definition TEXT NOT NULL,
                 english_definition TEXT NOT NULL,
                 gloss TEXT NOT NULL,
                 frequency TEXT NOT NULL,
                 display_order INTEGER NOT NULL,
-                FOREIGN KEY (word_id) REFERENCES words(word_id) ON DELETE CASCADE
+                FOREIGN KEY (lexicon_entry_id)
+                    REFERENCES lexicon_entries(lexicon_entry_id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS word_meaning_labels (
@@ -204,20 +221,12 @@ class SQLiteRepository(Repository):
                 if association.word.word_id is None
             }.values()
         )
-        new_meanings = [
-            meaning
-            for word in new_words
-            for meaning in word.meanings
-            if meaning.meaning_id is None
-        ]
         try:
             self._save_document(user_id, document, commit=False)
             for doc_part in document.doc_parts:
                 self._save_doc_part(document.document_id, doc_part, commit=False)
             for word in new_words:
                 self._save_word(user_id, word, commit=False)
-                for meaning in word.meanings:
-                    self._save_word_meaning(word.word_id, meaning, commit=False)
             for association in associations:
                 self._save_doc_part_word(association, commit=False)
             self._connection.commit()
@@ -229,8 +238,6 @@ class SQLiteRepository(Repository):
                 doc_part._assign_id(None)
             for word in new_words:
                 word._assign_id(None)
-            for meaning in new_meanings:
-                meaning._assign_id(None)
             raise
 
     def _save_document(
@@ -371,27 +378,26 @@ class SQLiteRepository(Repository):
         self._save_word(user_id, word, commit=True)
 
     def _save_word(self, user_id: int, word: Word, *, commit: bool) -> None:
+        lexicon_entry_id = self._ensure_lexicon_entry(word)
         if word.word_id is None:
             word._assign_id(
                 self._execute_insert(
                     """
                     INSERT INTO words (
-                        user_id, lemma, due, difficulty, stability, image_path,
-                        status, last_reviewed, pos, language
+                        user_id, lexicon_entry_id, due, difficulty, stability,
+                        image_path, status, last_reviewed
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         user_id,
-                        word.lemma,
+                        lexicon_entry_id,
                         self._date_to_text(word.due),
                         word.difficulty,
                         word.stability,
                         word.image_path,
                         word.status.name,
                         self._date_to_text(word.last_reviewed),
-                        word.pos.name,
-                        word.language.name,
                     ),
                     commit=commit,
                 )
@@ -400,34 +406,30 @@ class SQLiteRepository(Repository):
         self._connection.execute(
             """
             INSERT INTO words (
-                word_id, user_id, lemma, due, difficulty, stability,
-                image_path, status, last_reviewed, pos, language
+                word_id, user_id, lexicon_entry_id, due, difficulty,
+                stability, image_path, status, last_reviewed
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(word_id) DO UPDATE SET
                 user_id = excluded.user_id,
-                lemma = excluded.lemma,
+                lexicon_entry_id = excluded.lexicon_entry_id,
                 due = excluded.due,
                 difficulty = excluded.difficulty,
                 stability = excluded.stability,
                 image_path = excluded.image_path,
                 status = excluded.status,
-                last_reviewed = excluded.last_reviewed,
-                pos = excluded.pos,
-                language = excluded.language
+                last_reviewed = excluded.last_reviewed
             """,
             (
                 word.word_id,
                 user_id,
-                word.lemma,
+                lexicon_entry_id,
                 self._date_to_text(word.due),
                 word.difficulty,
                 word.stability,
                 word.image_path,
                 word.status.name,
                 self._date_to_text(word.last_reviewed),
-                word.pos.name,
-                word.language.name,
             ),
         )
         if commit:
@@ -435,7 +437,13 @@ class SQLiteRepository(Repository):
 
     def get_word(self, word_id: int) -> Word | None:
         row = self._connection.execute(
-            "SELECT * FROM words WHERE word_id = ?",
+            """
+            SELECT w.*, le.lemma, le.language, le.pos
+            FROM words AS w
+            INNER JOIN lexicon_entries AS le
+                ON le.lexicon_entry_id = w.lexicon_entry_id
+            WHERE w.word_id = ?
+            """,
             (word_id,),
         ).fetchone()
         if row is None:
@@ -444,7 +452,14 @@ class SQLiteRepository(Repository):
 
     def list_words(self, user_id: int) -> list[Word]:
         rows = self._connection.execute(
-            "SELECT * FROM words WHERE user_id = ? ORDER BY word_id",
+            """
+            SELECT w.*, le.lemma, le.language, le.pos
+            FROM words AS w
+            INNER JOIN lexicon_entries AS le
+                ON le.lexicon_entry_id = w.lexicon_entry_id
+            WHERE w.user_id = ?
+            ORDER BY w.word_id
+            """,
             (user_id,),
         ).fetchall()
         return [self._word_from_row(row) for row in rows]
@@ -460,11 +475,13 @@ class SQLiteRepository(Repository):
             rows.extend(
                 self._connection.execute(
                     f"""
-                    SELECT *
-                    FROM words
-                    WHERE user_id = ?
-                      AND language = ?
-                      AND lemma IN ({placeholders})
+                    SELECT w.*, le.lemma, le.language, le.pos
+                    FROM words AS w
+                    INNER JOIN lexicon_entries AS le
+                        ON le.lexicon_entry_id = w.lexicon_entry_id
+                    WHERE w.user_id = ?
+                      AND le.language = ?
+                      AND le.lemma IN ({placeholders})
                     """,
                     (user_id, language.name, *chunk),
                 ).fetchall()
@@ -478,18 +495,25 @@ class SQLiteRepository(Repository):
     def _save_word_meaning(
         self, word_id: int, meaning: WordMeaning, *, commit: bool
     ) -> None:
+        entry = self._connection.execute(
+            "SELECT lexicon_entry_id FROM words WHERE word_id = ?",
+            (word_id,),
+        ).fetchone()
+        if entry is None:
+            raise ValueError("Word must be saved before its meaning")
+        lexicon_entry_id = entry["lexicon_entry_id"]
         if meaning.meaning_id is None:
             meaning._assign_id(
                 self._execute_insert(
                     """
                     INSERT INTO word_meanings (
-                        word_id, korean_definition, english_definition, gloss,
-                        frequency, display_order
+                        lexicon_entry_id, source, korean_definition,
+                        english_definition, gloss, frequency, display_order
                     )
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    VALUES (?, 'USER', ?, ?, ?, ?, ?)
                     """,
                     (
-                        word_id,
+                        lexicon_entry_id,
                         meaning.korean_definition,
                         meaning.english_definition,
                         meaning.gloss,
@@ -503,12 +527,12 @@ class SQLiteRepository(Repository):
             self._connection.execute(
                 """
                 INSERT INTO word_meanings (
-                    meaning_id, word_id, korean_definition, english_definition,
-                    gloss, frequency, display_order
+                    meaning_id, lexicon_entry_id, source, korean_definition,
+                    english_definition, gloss, frequency, display_order
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, 'USER', ?, ?, ?, ?, ?)
                 ON CONFLICT(meaning_id) DO UPDATE SET
-                    word_id = excluded.word_id,
+                    lexicon_entry_id = excluded.lexicon_entry_id,
                     korean_definition = excluded.korean_definition,
                     english_definition = excluded.english_definition,
                     gloss = excluded.gloss,
@@ -517,7 +541,7 @@ class SQLiteRepository(Repository):
                 """,
                 (
                     meaning.meaning_id,
-                    word_id,
+                    lexicon_entry_id,
                     meaning.korean_definition,
                     meaning.english_definition,
                     meaning.gloss,
@@ -541,7 +565,9 @@ class SQLiteRepository(Repository):
             """
             SELECT *
             FROM word_meanings
-            WHERE word_id = ?
+            WHERE lexicon_entry_id = (
+                SELECT lexicon_entry_id FROM words WHERE word_id = ?
+            )
             ORDER BY display_order, meaning_id
             """,
             (word_id,),
@@ -563,8 +589,10 @@ class SQLiteRepository(Repository):
     def list_learning_words_in_active_parts(self, user_id: int) -> list[Word]:
         rows = self._connection.execute(
             """
-            SELECT DISTINCT w.*
+            SELECT DISTINCT w.*, le.lemma, le.language, le.pos
             FROM words AS w
+            INNER JOIN lexicon_entries AS le
+                ON le.lexicon_entry_id = w.lexicon_entry_id
             INNER JOIN doc_part_words AS dpw ON dpw.word_id = w.word_id
             INNER JOIN doc_parts AS dp ON dp.doc_part_id = dpw.doc_part_id
             INNER JOIN documents AS d ON d.document_id = dp.document_id
@@ -619,10 +647,13 @@ class SQLiteRepository(Repository):
         rows = self._connection.execute(
             """
             SELECT dpw.occurrences, dp.doc_part_id, dp.text, dp.position,
-                   dp.readability, dp.active, w.*
+                   dp.readability, dp.active, w.*,
+                   le.lemma, le.language, le.pos
             FROM doc_part_words AS dpw
             INNER JOIN doc_parts AS dp ON dp.doc_part_id = dpw.doc_part_id
             INNER JOIN words AS w ON w.word_id = dpw.word_id
+            INNER JOIN lexicon_entries AS le
+                ON le.lexicon_entry_id = w.lexicon_entry_id
             WHERE dpw.doc_part_id = ?
             ORDER BY w.word_id
             """,
@@ -639,6 +670,100 @@ class SQLiteRepository(Repository):
 
     def close(self) -> None:
         self._connection.close()
+
+    def get_lexicon_version(self, source: str) -> str | None:
+        row = self._connection.execute(
+            "SELECT version FROM lexicon_metadata WHERE source = ?",
+            (source,),
+        ).fetchone()
+        return None if row is None else row["version"]
+
+    def install_lexicon(
+        self,
+        source: str,
+        version: str,
+        checksum: str,
+        meanings: Iterable[tuple[str, Language, POS, WordMeaning]],
+    ) -> None:
+        try:
+            meaning_ids = self._connection.execute(
+                "SELECT meaning_id FROM word_meanings WHERE source = ?",
+                (source,),
+            ).fetchall()
+            self._connection.executemany(
+                "DELETE FROM word_meaning_labels WHERE meaning_id = ?",
+                ((row["meaning_id"],) for row in meaning_ids),
+            )
+            self._connection.execute(
+                "DELETE FROM word_meanings WHERE source = ?", (source,)
+            )
+            for lemma, language, pos, meaning in meanings:
+                entry_id = self._ensure_lexicon_entry_values(lemma, language, pos)
+                meaning._assign_id(
+                    self._execute_insert(
+                        """
+                        INSERT INTO word_meanings (
+                            lexicon_entry_id, source, korean_definition,
+                            english_definition, gloss, frequency, display_order
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            entry_id,
+                            source,
+                            meaning.korean_definition,
+                            meaning.english_definition,
+                            meaning.gloss,
+                            meaning.frequency.name,
+                            meaning.display_order,
+                        ),
+                        commit=False,
+                    )
+                )
+                self._connection.executemany(
+                    "INSERT INTO word_meaning_labels (meaning_id, label) VALUES (?, ?)",
+                    ((meaning.meaning_id, label.name) for label in meaning.labels),
+                )
+            self._connection.execute(
+                """
+                INSERT INTO lexicon_metadata (source, version, checksum)
+                VALUES (?, ?, ?)
+                ON CONFLICT(source) DO UPDATE SET
+                    version = excluded.version,
+                    checksum = excluded.checksum
+                """,
+                (source, version, checksum),
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+
+    def _ensure_lexicon_entry(self, word: Word) -> int:
+        return self._ensure_lexicon_entry_values(
+            word.lemma, word.language, word.pos
+        )
+
+    def _ensure_lexicon_entry_values(
+        self, lemma: str, language: Language, pos: POS
+    ) -> int:
+        self._connection.execute(
+            """
+            INSERT INTO lexicon_entries (lemma, language, pos)
+            VALUES (?, ?, ?)
+            ON CONFLICT(lemma, language, pos) DO NOTHING
+            """,
+            (lemma, language.name, pos.name),
+        )
+        row = self._connection.execute(
+            """
+            SELECT lexicon_entry_id
+            FROM lexicon_entries
+            WHERE lemma = ? AND language = ? AND pos = ?
+            """,
+            (lemma, language.name, pos.name),
+        ).fetchone()
+        return row["lexicon_entry_id"]
 
     def _execute_insert(
         self,

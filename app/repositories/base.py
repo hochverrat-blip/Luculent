@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 
 from app.domain.document import DocPart, Document
-from app.domain.enums import Language
+from app.domain.enums import Language, POS
 from app.domain.user import User
 from app.domain.word import DocPartWord, Word, WordMeaning
 
@@ -89,6 +90,20 @@ class Repository(ABC):
     @abstractmethod
     def list_word_meanings(self, word_id: int) -> list[WordMeaning]:
         """Return a word's meanings in display order"""
+
+    @abstractmethod
+    def get_lexicon_version(self, source: str) -> str | None:
+        """Return the installed version for a lexicon source"""
+
+    @abstractmethod
+    def install_lexicon(
+        self,
+        source: str,
+        version: str,
+        checksum: str,
+        meanings: Iterable[tuple[str, Language, POS, WordMeaning]],
+    ) -> None:
+        """Replace a source's shared lexicon meanings as one transaction"""
 
     @abstractmethod
     def list_learning_words_in_active_parts(self, user_id: int) -> list[Word]:

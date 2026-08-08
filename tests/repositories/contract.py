@@ -210,6 +210,33 @@ class RepositoryContract:
         assert updated.gloss == "ship"
         assert updated.labels == {MeaningLabel.TECHNICAL}
 
+    def test_lexicon_meanings_are_shared_between_users(self, repository):
+        meaning = WordMeaning(
+            None,
+            korean_definition="물 위로 다니는 운송 수단",
+            english_definition="a vessel used on water",
+            gloss="boat",
+        )
+        repository.install_lexicon(
+            "test lexicon",
+            "1",
+            "checksum",
+            [("배", Language.KOREAN, POS.NOUN, meaning)],
+        )
+        repository.save_user(User(421, "First reader"))
+        repository.save_user(User(422, "Second reader"))
+        first_word = Word(423, "배", Language.KOREAN, POS.NOUN)
+        second_word = Word(424, "배", Language.KOREAN, POS.NOUN)
+        repository.save_word(421, first_word)
+        repository.save_word(422, second_word)
+
+        first_meaning = repository.get_word(423).meanings[0]
+        second_meaning = repository.get_word(424).meanings[0]
+
+        assert repository.get_lexicon_version("test lexicon") == "1"
+        assert first_meaning.meaning_id == second_meaning.meaning_id
+        assert first_meaning.gloss == second_meaning.gloss == "boat"
+
     def test_doc_part_word_round_trip(self, repository):
         repository.save_user(User(501, "Vance"))
         repository.save_document(

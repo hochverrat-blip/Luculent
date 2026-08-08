@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import date
 from typing import Any, Callable
 
@@ -79,36 +80,55 @@ class MySQLRepository(Repository):
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             """
+            CREATE TABLE IF NOT EXISTS lexicon_entries (
+                lexicon_entry_id INT AUTO_INCREMENT PRIMARY KEY,
+                lemma VARCHAR(500) NOT NULL,
+                language VARCHAR(50) NOT NULL,
+                pos VARCHAR(50) NOT NULL,
+                CONSTRAINT uq_lexicon_entry UNIQUE (lemma, language, pos)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS lexicon_metadata (
+                source VARCHAR(255) PRIMARY KEY,
+                version VARCHAR(100) NOT NULL,
+                checksum VARCHAR(100) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """,
+            """
             CREATE TABLE IF NOT EXISTS words (
                 word_id INT AUTO_INCREMENT PRIMARY KEY,
                 user_id INT NOT NULL,
-                lemma VARCHAR(500) NOT NULL,
+                lexicon_entry_id INT NOT NULL,
                 due DATE NULL,
                 difficulty DOUBLE NOT NULL DEFAULT 0.0,
                 stability DOUBLE NOT NULL DEFAULT 0.0,
                 image_path VARCHAR(1000) NULL,
                 status VARCHAR(50) NOT NULL,
                 last_reviewed DATE NULL,
-                pos VARCHAR(50) NOT NULL,
-                language VARCHAR(50) NOT NULL,
                 CONSTRAINT fk_words_user
                     FOREIGN KEY (user_id) REFERENCES users(user_id)
                     ON DELETE CASCADE,
-                CONSTRAINT uq_words_user_language_lemma
-                    UNIQUE (user_id, language, lemma, pos)
+                CONSTRAINT fk_words_lexicon_entry
+                    FOREIGN KEY (lexicon_entry_id)
+                    REFERENCES lexicon_entries(lexicon_entry_id),
+                CONSTRAINT uq_words_user_entry
+                    UNIQUE (user_id, lexicon_entry_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             """
             CREATE TABLE IF NOT EXISTS word_meanings (
                 meaning_id INT AUTO_INCREMENT PRIMARY KEY,
-                word_id INT NOT NULL,
+                lexicon_entry_id INT NOT NULL,
+                source VARCHAR(255) NOT NULL DEFAULT 'USER',
                 korean_definition TEXT NOT NULL,
                 english_definition TEXT NOT NULL,
                 gloss VARCHAR(500) NOT NULL,
                 frequency VARCHAR(50) NOT NULL,
                 display_order INT NOT NULL,
-                CONSTRAINT fk_word_meanings_word
-                    FOREIGN KEY (word_id) REFERENCES words(word_id)
+                CONSTRAINT fk_word_meanings_entry
+                    FOREIGN KEY (lexicon_entry_id)
+                    REFERENCES lexicon_entries(lexicon_entry_id)
                     ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
@@ -241,20 +261,12 @@ class MySQLRepository(Repository):
                 if association.word.word_id is None
             }.values()
         )
-        new_meanings = [
-            meaning
-            for word in new_words
-            for meaning in word.meanings
-            if meaning.meaning_id is None
-        ]
         try:
             self._save_document(user_id, document, commit=False)
             for doc_part in document.doc_parts:
                 self._save_doc_part(document.document_id, doc_part, commit=False)
             for word in new_words:
                 self._save_word(user_id, word, commit=False)
-                for meaning in word.meanings:
-                    self._save_word_meaning(word.word_id, meaning, commit=False)
             for association in associations:
                 self._save_doc_part_word(association, commit=False)
             self._connection.commit()
@@ -266,8 +278,6 @@ class MySQLRepository(Repository):
                 doc_part._assign_id(None)
             for word in new_words:
                 word._assign_id(None)
-            for meaning in new_meanings:
-                meaning._assign_id(None)
             raise
 
     def _save_document(
@@ -404,30 +414,26 @@ class MySQLRepository(Repository):
         self._save_word(user_id, word, commit=True)
 
     def _save_word(self, user_id: int, word: Word, *, commit: bool) -> None:
+        lexicon_entry_id = self._ensure_lexicon_entry(word)
         if word.word_id is None:
             word._assign_id(
                 self._execute_insert(
                     """
                     INSERT INTO words (
-                        user_id, lemma, due, difficulty, stability, image_path,
-                        status, last_reviewed, pos, language
+                        user_id, lexicon_entry_id, due, difficulty, stability,
+                        image_path, status, last_reviewed
                     )
-                    VALUES (
-                        %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s
-                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         user_id,
-                        word.lemma,
+                        lexicon_entry_id,
                         word.due,
                         word.difficulty,
                         word.stability,
                         word.image_path,
                         word.status.name,
                         word.last_reviewed,
-                        word.pos.name,
-                        word.language.name,
                     ),
                     commit=commit,
                 )
@@ -436,51 +442,57 @@ class MySQLRepository(Repository):
         self._execute_write(
             """
             INSERT INTO words (
-                word_id, user_id, lemma, due, difficulty, stability,
-                image_path, status, last_reviewed, pos, language
+                word_id, user_id, lexicon_entry_id, due, difficulty,
+                stability, image_path, status, last_reviewed
             )
-            VALUES (
-                %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s
-            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 user_id = VALUES(user_id),
-                lemma = VALUES(lemma),
+                lexicon_entry_id = VALUES(lexicon_entry_id),
                 due = VALUES(due),
                 difficulty = VALUES(difficulty),
                 stability = VALUES(stability),
                 image_path = VALUES(image_path),
                 status = VALUES(status),
-                last_reviewed = VALUES(last_reviewed),
-                pos = VALUES(pos),
-                language = VALUES(language)
+                last_reviewed = VALUES(last_reviewed)
             """,
             (
                 word.word_id,
                 user_id,
-                word.lemma,
+                lexicon_entry_id,
                 word.due,
                 word.difficulty,
                 word.stability,
                 word.image_path,
                 word.status.name,
                 word.last_reviewed,
-                word.pos.name,
-                word.language.name,
             ),
             commit=commit,
         )
 
     def get_word(self, word_id: int) -> Word | None:
         row = self._fetch_one(
-            "SELECT * FROM words WHERE word_id = %s",
+            """
+            SELECT w.*, le.lemma, le.language, le.pos
+            FROM words AS w
+            INNER JOIN lexicon_entries AS le
+                ON le.lexicon_entry_id = w.lexicon_entry_id
+            WHERE w.word_id = %s
+            """,
             (word_id,),
         )
         return None if row is None else self._word_from_row(row)
 
     def list_words(self, user_id: int) -> list[Word]:
         rows = self._fetch_all(
-            "SELECT * FROM words WHERE user_id = %s ORDER BY word_id",
+            """
+            SELECT w.*, le.lemma, le.language, le.pos
+            FROM words AS w
+            INNER JOIN lexicon_entries AS le
+                ON le.lexicon_entry_id = w.lexicon_entry_id
+            WHERE w.user_id = %s
+            ORDER BY w.word_id
+            """,
             (user_id,),
         )
         return [self._word_from_row(row) for row in rows]
@@ -496,11 +508,13 @@ class MySQLRepository(Repository):
             rows.extend(
                 self._fetch_all(
                     f"""
-                    SELECT *
-                    FROM words
-                    WHERE user_id = %s
-                      AND language = %s
-                      AND lemma IN ({placeholders})
+                    SELECT w.*, le.lemma, le.language, le.pos
+                    FROM words AS w
+                    INNER JOIN lexicon_entries AS le
+                        ON le.lexicon_entry_id = w.lexicon_entry_id
+                    WHERE w.user_id = %s
+                      AND le.language = %s
+                      AND le.lemma IN ({placeholders})
                     """,
                     (user_id, language.name, *chunk),
                 )
@@ -514,18 +528,25 @@ class MySQLRepository(Repository):
     def _save_word_meaning(
         self, word_id: int, meaning: WordMeaning, *, commit: bool
     ) -> None:
+        entry = self._fetch_one(
+            "SELECT lexicon_entry_id FROM words WHERE word_id = %s",
+            (word_id,),
+        )
+        if entry is None:
+            raise ValueError("Word must be saved before its meaning")
+        lexicon_entry_id = entry["lexicon_entry_id"]
         if meaning.meaning_id is None:
             meaning._assign_id(
                 self._execute_insert(
                     """
                     INSERT INTO word_meanings (
-                        word_id, korean_definition, english_definition, gloss,
-                        frequency, display_order
+                        lexicon_entry_id, source, korean_definition,
+                        english_definition, gloss, frequency, display_order
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    VALUES (%s, 'USER', %s, %s, %s, %s, %s)
                     """,
                     (
-                        word_id,
+                        lexicon_entry_id,
                         meaning.korean_definition,
                         meaning.english_definition,
                         meaning.gloss,
@@ -539,12 +560,12 @@ class MySQLRepository(Repository):
             self._execute_write(
                 """
                 INSERT INTO word_meanings (
-                    meaning_id, word_id, korean_definition, english_definition,
-                    gloss, frequency, display_order
+                    meaning_id, lexicon_entry_id, source, korean_definition,
+                    english_definition, gloss, frequency, display_order
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, 'USER', %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
-                    word_id = VALUES(word_id),
+                    lexicon_entry_id = VALUES(lexicon_entry_id),
                     korean_definition = VALUES(korean_definition),
                     english_definition = VALUES(english_definition),
                     gloss = VALUES(gloss),
@@ -553,7 +574,7 @@ class MySQLRepository(Repository):
                 """,
                 (
                     meaning.meaning_id,
-                    word_id,
+                    lexicon_entry_id,
                     meaning.korean_definition,
                     meaning.english_definition,
                     meaning.gloss,
@@ -584,7 +605,9 @@ class MySQLRepository(Repository):
             """
             SELECT *
             FROM word_meanings
-            WHERE word_id = %s
+            WHERE lexicon_entry_id = (
+                SELECT lexicon_entry_id FROM words WHERE word_id = %s
+            )
             ORDER BY display_order, meaning_id
             """,
             (word_id,),
@@ -606,8 +629,10 @@ class MySQLRepository(Repository):
     def list_learning_words_in_active_parts(self, user_id: int) -> list[Word]:
         rows = self._fetch_all(
             """
-            SELECT DISTINCT w.*
+            SELECT DISTINCT w.*, le.lemma, le.language, le.pos
             FROM words AS w
+            INNER JOIN lexicon_entries AS le
+                ON le.lexicon_entry_id = w.lexicon_entry_id
             INNER JOIN doc_part_words AS dpw ON dpw.word_id = w.word_id
             INNER JOIN doc_parts AS dp ON dp.doc_part_id = dpw.doc_part_id
             INNER JOIN documents AS d ON d.document_id = dp.document_id
@@ -660,10 +685,13 @@ class MySQLRepository(Repository):
         rows = self._fetch_all(
             """
             SELECT dpw.occurrences, dp.doc_part_id, dp.text, dp.position,
-                   dp.readability, dp.active, w.*
+                   dp.readability, dp.active, w.*,
+                   le.lemma, le.language, le.pos
             FROM doc_part_words AS dpw
             INNER JOIN doc_parts AS dp ON dp.doc_part_id = dpw.doc_part_id
             INNER JOIN words AS w ON w.word_id = dpw.word_id
+            INNER JOIN lexicon_entries AS le
+                ON le.lexicon_entry_id = w.lexicon_entry_id
             WHERE dpw.doc_part_id = %s
             ORDER BY w.word_id
             """,
@@ -680,6 +708,101 @@ class MySQLRepository(Repository):
 
     def close(self) -> None:
         self._connection.close()
+
+    def get_lexicon_version(self, source: str) -> str | None:
+        row = self._fetch_one(
+            "SELECT version FROM lexicon_metadata WHERE source = %s",
+            (source,),
+        )
+        return None if row is None else row["version"]
+
+    def install_lexicon(
+        self,
+        source: str,
+        version: str,
+        checksum: str,
+        meanings: Iterable[tuple[str, Language, POS, WordMeaning]],
+    ) -> None:
+        try:
+            self._execute_write(
+                "DELETE FROM word_meanings WHERE source = %s",
+                (source,),
+                commit=False,
+            )
+            for lemma, language, pos, meaning in meanings:
+                entry_id = self._ensure_lexicon_entry_values(lemma, language, pos)
+                meaning._assign_id(
+                    self._execute_insert(
+                        """
+                        INSERT INTO word_meanings (
+                            lexicon_entry_id, source, korean_definition,
+                            english_definition, gloss, frequency, display_order
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            entry_id,
+                            source,
+                            meaning.korean_definition,
+                            meaning.english_definition,
+                            meaning.gloss,
+                            meaning.frequency.name,
+                            meaning.display_order,
+                        ),
+                        commit=False,
+                    )
+                )
+                for label in meaning.labels:
+                    self._execute_write(
+                        """
+                        INSERT INTO word_meaning_labels (meaning_id, label)
+                        VALUES (%s, %s)
+                        """,
+                        (meaning.meaning_id, label.name),
+                        commit=False,
+                    )
+            self._execute_write(
+                """
+                INSERT INTO lexicon_metadata (source, version, checksum)
+                VALUES (%s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    version = VALUES(version),
+                    checksum = VALUES(checksum)
+                """,
+                (source, version, checksum),
+                commit=False,
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+
+    def _ensure_lexicon_entry(self, word: Word) -> int:
+        return self._ensure_lexicon_entry_values(
+            word.lemma, word.language, word.pos
+        )
+
+    def _ensure_lexicon_entry_values(
+        self, lemma: str, language: Language, pos: POS
+    ) -> int:
+        self._execute_write(
+            """
+            INSERT INTO lexicon_entries (lemma, language, pos)
+            VALUES (%s, %s, %s)
+            ON DUPLICATE KEY UPDATE lexicon_entry_id = LAST_INSERT_ID(lexicon_entry_id)
+            """,
+            (lemma, language.name, pos.name),
+            commit=False,
+        )
+        row = self._fetch_one(
+            """
+            SELECT lexicon_entry_id
+            FROM lexicon_entries
+            WHERE lemma = %s AND language = %s AND pos = %s
+            """,
+            (lemma, language.name, pos.name),
+        )
+        return row["lexicon_entry_id"]
 
     def _execute_write(
         self,

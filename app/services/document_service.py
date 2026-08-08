@@ -10,7 +10,7 @@ from spacy.language import Language as SpacyLanguage
 from spacy_language_detection import LanguageDetector
 
 from app.domain import DocPart, DocPartWord, Document, Language, POS, User, Word
-from app.lexicon import create_lexicon
+from app.lexicon import ensure_lexicon
 from app.scraper import Scraper
 from app.services.base_service import Service
 
@@ -87,6 +87,7 @@ class DocumentService(Service):
 
     def _import_words(self, user: User, document: Document) -> None:
         self._require_saved_user(user)
+        ensure_lexicon(self._repository, document.language)
         part_words: list[Counter[tuple[str, POS]]] = []
         identities: set[tuple[str, POS]] = set()
         for doc_part in document.doc_parts:
@@ -105,20 +106,12 @@ class DocumentService(Service):
                 {lemma for lemma, pos in identities},
             )
         }
-        lexicon = create_lexicon(document.language)
-        try:
-            for identity in identities:
-                if identity not in words:
-                    lemma, pos = identity
-                    word = Word(
-                        None, lemma=lemma, language=document.language, pos=pos
-                    )
-                    word.meanings.extend(
-                        lexicon.get_meanings(lemma, document.language, pos)
-                    )
-                    words[identity] = word
-        finally:
-            lexicon.close()
+        for identity in identities:
+            if identity not in words:
+                lemma, pos = identity
+                words[identity] = Word(
+                    None, lemma=lemma, language=document.language, pos=pos
+                )
 
         associations: list[DocPartWord] = []
         for doc_part, counts in zip(document.doc_parts, part_words):

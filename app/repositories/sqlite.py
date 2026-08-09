@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterable
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from app.domain.document import DocPart, Document
-from app.domain.enums import Language, MeaningFrequency, MeaningLabel, POS, Status
+from app.domain.enums import (
+    Language,
+    MeaningFrequency,
+    MeaningLabel,
+    POS,
+    Response,
+    Status,
+)
 from app.domain.user import User
-from app.domain.word import DocPartWord, Word, WordMeaning
+from app.domain.word import DocPartWord, Word, WordMeaning, WordReview
 from app.repositories.base import Repository
 
 
@@ -78,6 +85,7 @@ class SQLiteRepository(Repository):
                 image_path TEXT,
                 status TEXT NOT NULL,
                 last_reviewed TEXT,
+                step INTEGER,
                 FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
                 FOREIGN KEY (lexicon_entry_id)
                     REFERENCES lexicon_entries(lexicon_entry_id),
@@ -95,6 +103,16 @@ class SQLiteRepository(Repository):
                 display_order INTEGER NOT NULL,
                 FOREIGN KEY (lexicon_entry_id)
                     REFERENCES lexicon_entries(lexicon_entry_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS word_reviews (
+                review_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                word_id INTEGER NOT NULL,
+                response TEXT NOT NULL,
+                status_before TEXT NOT NULL,
+                reviewed_at TEXT NOT NULL,
+                duration_ms INTEGER,
+                FOREIGN KEY (word_id) REFERENCES words(word_id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS word_meaning_labels (
@@ -374,6 +392,38 @@ class SQLiteRepository(Repository):
         ).fetchall()
         return [self._doc_part_from_row(row) for row in rows]
 
+    def activate_doc_part(self, user_id: int, doc_part_id: int) -> None:
+        try:
+            owned = self._connection.execute(
+                """
+                SELECT 1
+                FROM doc_parts AS dp
+                INNER JOIN documents AS d ON d.document_id = dp.document_id
+                WHERE dp.doc_part_id = ? AND d.user_id = ?
+                """,
+                (doc_part_id, user_id),
+            ).fetchone()
+            if owned is None:
+                raise ValueError("Document part must belong to the user")
+            self._connection.execute(
+                """
+                UPDATE doc_parts
+                SET active = 0
+                WHERE document_id IN (
+                    SELECT document_id FROM documents WHERE user_id = ?
+                )
+                """,
+                (user_id,),
+            )
+            self._connection.execute(
+                "UPDATE doc_parts SET active = 1 WHERE doc_part_id = ?",
+                (doc_part_id,),
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+
     def save_word(self, user_id: int, word: Word) -> None:
         self._save_word(user_id, word, commit=True)
 
@@ -385,19 +435,20 @@ class SQLiteRepository(Repository):
                     """
                     INSERT INTO words (
                         user_id, lexicon_entry_id, due, difficulty, stability,
-                        image_path, status, last_reviewed
+                        image_path, status, last_reviewed, step
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         user_id,
                         lexicon_entry_id,
-                        self._date_to_text(word.due),
+                        self._datetime_to_text(word.due),
                         word.difficulty,
                         word.stability,
                         word.image_path,
                         word.status.name,
-                        self._date_to_text(word.last_reviewed),
+                        self._datetime_to_text(word.last_reviewed),
+                        word.step,
                     ),
                     commit=commit,
                 )
@@ -407,9 +458,9 @@ class SQLiteRepository(Repository):
             """
             INSERT INTO words (
                 word_id, user_id, lexicon_entry_id, due, difficulty,
-                stability, image_path, status, last_reviewed
+                stability, image_path, status, last_reviewed, step
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(word_id) DO UPDATE SET
                 user_id = excluded.user_id,
                 lexicon_entry_id = excluded.lexicon_entry_id,
@@ -418,18 +469,20 @@ class SQLiteRepository(Repository):
                 stability = excluded.stability,
                 image_path = excluded.image_path,
                 status = excluded.status,
-                last_reviewed = excluded.last_reviewed
+                last_reviewed = excluded.last_reviewed,
+                step = excluded.step
             """,
             (
                 word.word_id,
                 user_id,
                 lexicon_entry_id,
-                self._date_to_text(word.due),
+                self._datetime_to_text(word.due),
                 word.difficulty,
                 word.stability,
                 word.image_path,
                 word.status.name,
-                self._date_to_text(word.last_reviewed),
+                self._datetime_to_text(word.last_reviewed),
+                word.step,
             ),
         )
         if commit:
@@ -488,6 +541,87 @@ class SQLiteRepository(Repository):
             )
         rows.sort(key=lambda row: row["word_id"])
         return [self._word_from_row(row) for row in rows]
+
+    def update_word_study(self, word: Word) -> None:
+        if word.word_id is None:
+            raise ValueError("Word must be saved before recording a response")
+        try:
+            self._update_word_study(word)
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+
+    def record_word_review(self, word: Word, review: WordReview) -> None:
+        try:
+            self._update_word_study(word)
+            review._assign_id(
+                self._execute_insert(
+                    """
+                    INSERT INTO word_reviews (
+                        word_id, response, status_before, reviewed_at, duration_ms
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        review.word_id,
+                        review.response.name,
+                        review.status_before.name,
+                        self._datetime_to_text(review.reviewed_at),
+                        review.duration_ms,
+                    ),
+                    commit=False,
+                )
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            review._assign_id(None)
+            raise
+
+    def list_word_reviews(self, word_id: int) -> list[WordReview]:
+        rows = self._connection.execute(
+            """
+            SELECT review_id, word_id, response, status_before, reviewed_at,
+                   duration_ms
+            FROM word_reviews
+            WHERE word_id = ?
+            ORDER BY reviewed_at, review_id
+            """,
+            (word_id,),
+        ).fetchall()
+        return [
+            WordReview(
+                row["review_id"],
+                row["word_id"],
+                Response[row["response"]],
+                Status[row["status_before"]],
+                self._text_to_datetime(row["reviewed_at"]),
+                row["duration_ms"],
+            )
+            for row in rows
+        ]
+
+    def _update_word_study(self, word: Word) -> None:
+        cursor = self._connection.execute(
+            """
+            UPDATE words
+            SET due = ?, difficulty = ?, stability = ?, status = ?,
+                last_reviewed = ?, step = ?
+            WHERE word_id = ?
+            """,
+            (
+                self._datetime_to_text(word.due),
+                word.difficulty,
+                word.stability,
+                word.status.name,
+                self._datetime_to_text(word.last_reviewed),
+                word.step,
+                word.word_id,
+            ),
+        )
+        if cursor.rowcount == 0:
+            raise ValueError("Word must be saved before recording a response")
 
     def save_word_meaning(self, word_id: int, meaning: WordMeaning) -> None:
         self._save_word_meaning(word_id, meaning, commit=True)
@@ -586,7 +720,9 @@ class SQLiteRepository(Repository):
             meaning.labels.update(MeaningLabel[row["label"]] for row in labels)
         return meanings
 
-    def list_learning_words_in_active_parts(self, user_id: int) -> list[Word]:
+    def list_due_words_in_active_parts(
+        self, user_id: int, due_at: datetime
+    ) -> list[Word]:
         rows = self._connection.execute(
             """
             SELECT DISTINCT w.*, le.lemma, le.language, le.pos
@@ -598,11 +734,20 @@ class SQLiteRepository(Repository):
             INNER JOIN documents AS d ON d.document_id = dp.document_id
             WHERE w.user_id = ?
               AND d.user_id = ?
-              AND w.status = ?
+              AND w.status IN (?, ?, ?, ?)
+              AND (w.due IS NULL OR w.due <= ?)
               AND dp.active = 1
-            ORDER BY w.word_id
+            ORDER BY w.due IS NOT NULL, w.due, w.word_id
             """,
-            (user_id, user_id, Status.LEARNING.name),
+            (
+                user_id,
+                user_id,
+                Status.NEW.name,
+                Status.LEARNING.name,
+                Status.REVIEW.name,
+                Status.RELEARNING.name,
+                self._datetime_to_text(due_at),
+            ),
         ).fetchall()
         return [self._word_from_row(row) for row in rows]
 
@@ -805,12 +950,15 @@ class SQLiteRepository(Repository):
             language=Language[row["language"]],
             pos=POS[row["pos"]],
         )
-        word.due = SQLiteRepository._text_to_date(row["due"])
+        word.due = SQLiteRepository._text_to_datetime(row["due"])
         word.difficulty = row["difficulty"]
         word.stability = row["stability"]
         word.image_path = row["image_path"]
         word.status = Status[row["status"]]
-        word.last_reviewed = SQLiteRepository._text_to_date(row["last_reviewed"])
+        word.last_reviewed = SQLiteRepository._text_to_datetime(
+            row["last_reviewed"]
+        )
+        word.step = row["step"]
         word.meanings.extend(self.list_word_meanings(word.word_id))
         return word
 
@@ -826,9 +974,9 @@ class SQLiteRepository(Repository):
         )
 
     @staticmethod
-    def _date_to_text(value: date | None) -> str | None:
-        return value.isoformat() if value is not None else None
+    def _datetime_to_text(value: datetime | None) -> str | None:
+        return value.astimezone(timezone.utc).isoformat() if value is not None else None
 
     @staticmethod
-    def _text_to_date(value: str | None) -> date | None:
-        return date.fromisoformat(value) if value is not None else None
+    def _text_to_datetime(value: str | None) -> datetime | None:
+        return datetime.fromisoformat(value) if value is not None else None

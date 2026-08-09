@@ -7,7 +7,7 @@ class Language(Enum):
 
 
 class Response(Enum):
-    KNOWN = "Known"
+    AGAIN = "Again"
     EASY = "Easy"
     GOOD = "Good"
     HARD = "Hard"
@@ -17,6 +17,8 @@ class Status(Enum):
     KNOWN = "Known"
     LEARNING = "Learning"
     NEW = "New"
+    RELEARNING = "Relearning"
+    REVIEW = "Review"
     SUSPENDED = "Suspended"
 
 

@@ -9,7 +9,16 @@ from kiwipiepy import Kiwi
 from spacy.language import Language as SpacyLanguage
 from spacy_language_detection import LanguageDetector
 
-from app.domain import DocPart, DocPartWord, Document, Language, POS, User, Word
+from app.domain import (
+    DocPart,
+    DocPartWord,
+    Document,
+    Language,
+    POS,
+    Status,
+    User,
+    Word,
+)
 from app.lexicon import ensure_lexicon
 from app.scraper import Scraper
 from app.services.base_service import Service
@@ -85,6 +94,41 @@ class DocumentService(Service):
         self._require_saved_user(user)
         return self._repository.list_documents(user.user_id)
 
+    def activate_docpart(self, user: User, docpart: DocPart) -> None:
+        self._require_saved_user(user)
+        if docpart.doc_part_id is None:
+            raise ValueError("Document part must be saved before activation")
+        self._repository.activate_doc_part(user.user_id, docpart.doc_part_id)
+        docpart.active = True
+
+    def get_md_text(self, user: User, text: str) -> str:
+        self._require_saved_user(user)
+        if not text:
+            return text
+        language_code = self._detect_language_code(text).lower()
+        if language_code not in SUPPORTED_DOCUMENT_LANGUAGES:
+            raise ValueError(f"Unsupported document language: {language_code}")
+        language = SUPPORTED_DOCUMENT_LANGUAGES[language_code]
+        spans = list(self._content_word_spans(text, language))
+        words = {
+            (word.lemma, word.pos): word
+            for word in self._repository.list_words_by_lemmas(
+                user.user_id,
+                language,
+                {lemma for lemma, pos, start, end in spans},
+            )
+        }
+        difficult = {
+            (start, end)
+            for lemma, pos, start, end in spans
+            if (word := words.get((lemma, pos))) is not None
+            and word.status not in {Status.KNOWN, Status.SUSPENDED}
+        }
+        marked = text
+        for start, end in sorted(difficult, reverse=True):
+            marked = f"{marked[:start]}**{marked[start:end]}**{marked[end:]}"
+        return marked
+
     def _import_words(self, user: User, document: Document) -> None:
         self._require_saved_user(user)
         ensure_lexicon(self._repository, document.language)
@@ -125,6 +169,15 @@ class DocumentService(Service):
 
     @staticmethod
     def _content_words(text: str, language: Language) -> Iterator[tuple[str, POS]]:
+        for lemma, pos, start, end in DocumentService._content_word_spans(
+            text, language
+        ):
+            yield lemma, pos
+
+    @staticmethod
+    def _content_word_spans(
+        text: str, language: Language
+    ) -> Iterator[tuple[str, POS, int, int]]:
         if language is Language.KOREAN:
             tokens = _KOREAN_PIPELINE.tokenize(text, typos="basic")
             index = 0
@@ -136,7 +189,12 @@ class DocumentService(Service):
                     suffix_tag = suffix.tag.split("-", 1)[0]
                     if suffix_tag in {"XSA", "XSV"}:
                         pos = POS.ADJECTIVE if suffix_tag == "XSA" else POS.VERB
-                        yield f"{token.form}{suffix.form}다".casefold(), pos
+                        yield (
+                            f"{token.form}{suffix.form}다".casefold(),
+                            pos,
+                            token.start,
+                            suffix.start + suffix.len,
+                        )
                         index += 2
                         continue
 
@@ -147,7 +205,7 @@ class DocumentService(Service):
                 lemma = token.form.casefold()
                 if pos in {POS.ADJECTIVE, POS.VERB}:
                     lemma += "다"
-                yield lemma, pos
+                yield lemma, pos, token.start, token.start + token.len
                 index += 1
             return
 
@@ -155,7 +213,7 @@ class DocumentService(Service):
             pos = _CONTENT_POS.get(token.pos_)
             lemma = token.lemma_.strip().casefold()
             if pos is not None and token.is_alpha and lemma:
-                yield lemma, pos
+                yield lemma, pos, token.idx, token.idx + len(token.text)
 
     def _require_saved_user(self, user: User) -> None:
         if user.user_id is None or self._repository.get_user(user.user_id) is None:

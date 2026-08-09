@@ -1,11 +1,18 @@
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pytest
 
 from app.domain.document import DocPart, Document
-from app.domain.enums import Language, MeaningFrequency, MeaningLabel, POS, Status
+from app.domain.enums import (
+    Language,
+    MeaningFrequency,
+    MeaningLabel,
+    POS,
+    Response,
+    Status,
+)
 from app.domain.user import User
-from app.domain.word import DocPartWord, Word, WordMeaning
+from app.domain.word import DocPartWord, Word, WordMeaning, WordReview
 from app.repositories import Repository
 
 
@@ -79,6 +86,30 @@ class RepositoryContract:
         assert all(part.doc_part_id is None for part in document.doc_parts)
         assert repository.list_documents(211) == []
 
+    def test_activating_part_deactivates_users_other_parts(self, repository):
+        repository.save_user(User(215, "Reader"))
+        repository.save_user(User(216, "Other Reader"))
+        repository.save_document(
+            215, Document(217, "First", "Text", Language.ENGLISH)
+        )
+        repository.save_document(
+            215, Document(218, "Second", "Text", Language.ENGLISH)
+        )
+        repository.save_document(
+            216, Document(219, "Other", "Text", Language.ENGLISH)
+        )
+        repository.save_doc_part(217, DocPart(220, "Old", 0, active=True))
+        repository.save_doc_part(218, DocPart(221, "New", 0))
+        repository.save_doc_part(219, DocPart(222, "Other", 0, active=True))
+
+        repository.activate_doc_part(215, 221)
+
+        assert repository.list_doc_parts(217)[0].active is False
+        assert repository.list_doc_parts(218)[0].active is True
+        assert repository.list_doc_parts(219)[0].active is True
+        with pytest.raises(ValueError, match="belong"):
+            repository.activate_doc_part(215, 222)
+
     def test_document_import_rolls_back_every_entity(self, repository):
         repository.save_user(User(221, "Document Owner"))
         repository.save_user(User(222, "Word Owner"))
@@ -126,23 +157,27 @@ class RepositoryContract:
             language=Language.KOREAN,
             pos=POS.NOUN,
         )
-        word.due = date(2026, 7, 25)
+        word.due = datetime(2026, 7, 25, 14, 30, tzinfo=timezone.utc)
         word.difficulty = 4.5
         word.stability = 8.0
         word.image_path = "images/document.png"
         word.status = Status.LEARNING
-        word.last_reviewed = date(2026, 7, 22)
+        word.last_reviewed = datetime(2026, 7, 22, 14, 30, tzinfo=timezone.utc)
+        word.step = 1
 
         repository.save_word(401, word)
         loaded = repository.get_word(402)
 
         assert loaded.lemma == "문서"
-        assert loaded.due == date(2026, 7, 25)
+        assert loaded.due == datetime(2026, 7, 25, 14, 30, tzinfo=timezone.utc)
         assert loaded.difficulty == pytest.approx(4.5)
         assert loaded.stability == pytest.approx(8.0)
         assert loaded.image_path == "images/document.png"
         assert loaded.status is Status.LEARNING
-        assert loaded.last_reviewed == date(2026, 7, 22)
+        assert loaded.last_reviewed == datetime(
+            2026, 7, 22, 14, 30, tzinfo=timezone.utc
+        )
+        assert loaded.step == 1
         assert loaded.pos is POS.NOUN
         assert loaded.language is Language.KOREAN
         assert repository.get_word(2147483000) is None
@@ -254,7 +289,7 @@ class RepositoryContract:
         assert associations[0].doc_part.doc_part_id == 503
         assert associations[0].occurrences == 4
 
-    def test_lists_only_learning_words_in_users_active_parts(self, repository):
+    def test_lists_only_due_words_in_users_active_parts(self, repository):
         repository.save_user(User(601, "Reader"))
         repository.save_user(User(602, "Other Reader"))
         repository.save_document(
@@ -267,23 +302,81 @@ class RepositoryContract:
 
         included = Word(606, "included")
         included.status = Status.LEARNING
+        included.due = datetime(2026, 7, 22, 12, 0, tzinfo=timezone.utc)
         inactive = Word(607, "inactive")
         inactive.status = Status.LEARNING
-        not_learning = Word(608, "new")
+        new_word = Word(608, "new")
         other_users = Word(609, "other")
         other_users.status = Status.LEARNING
+        future = Word(610, "future")
+        future.status = Status.LEARNING
+        future.due = datetime(2026, 7, 24, 12, 0, tzinfo=timezone.utc)
         repository.save_word(601, included)
         repository.save_word(601, inactive)
-        repository.save_word(601, not_learning)
+        repository.save_word(601, new_word)
         repository.save_word(602, other_users)
+        repository.save_word(601, future)
         repository.save_doc_part_word(DocPartWord(included, active_part, 1))
         repository.save_doc_part_word(DocPartWord(inactive, inactive_part, 1))
-        repository.save_doc_part_word(DocPartWord(not_learning, active_part, 1))
+        repository.save_doc_part_word(DocPartWord(new_word, active_part, 1))
+        repository.save_doc_part_word(DocPartWord(future, active_part, 1))
 
-        words = repository.list_learning_words_in_active_parts(601)
+        words = repository.list_due_words_in_active_parts(
+            601, datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+        )
 
-        assert [word.word_id for word in words] == [606]
+        assert [word.word_id for word in words] == [608, 606]
 
+    def test_updates_only_word_study_fields(self, repository):
+        repository.save_user(User(621, "Reader"))
+        word = Word(622, "word")
+        repository.save_word(621, word)
+        word.status = Status.LEARNING
+        word.difficulty = 4.9
+        word.stability = 3.0
+        word.last_reviewed = datetime(2026, 7, 22, 12, 0, tzinfo=timezone.utc)
+        word.due = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
+        word.step = 1
+
+        repository.update_word_study(word)
+
+        loaded = repository.get_word(622)
+        assert loaded.status is Status.LEARNING
+        assert loaded.difficulty == pytest.approx(4.9)
+        assert loaded.stability == pytest.approx(3.0)
+        assert loaded.last_reviewed == datetime(
+            2026, 7, 22, 12, 0, tzinfo=timezone.utc
+        )
+        assert loaded.due == datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
+        assert loaded.step == 1
+
+    def test_word_reviews_round_trip(self, repository):
+        repository.save_user(User(631, "Reader"))
+        word = Word(632, "word")
+        repository.save_word(631, word)
+        reviewed_at = datetime(2026, 7, 22, 12, 0, tzinfo=timezone.utc)
+        word.status = Status.LEARNING
+        word.step = 0
+        word.due = reviewed_at
+        review = WordReview(
+            None,
+            632,
+            Response.AGAIN,
+            Status.REVIEW,
+            reviewed_at,
+            2400,
+        )
+
+        repository.record_word_review(word, review)
+
+        reviews = repository.list_word_reviews(632)
+        assert isinstance(review.review_id, int)
+        assert len(reviews) == 1
+        assert reviews[0].review_id == review.review_id
+        assert reviews[0].response is Response.AGAIN
+        assert reviews[0].status_before is Status.REVIEW
+        assert reviews[0].reviewed_at == reviewed_at
+        assert reviews[0].duration_ms == 2400
     def test_rejects_doc_part_word_owned_by_different_users(self, repository):
         repository.save_user(User(611, "Document Owner"))
         repository.save_user(User(612, "Word Owner"))

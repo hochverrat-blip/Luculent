@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pytest
 from app.domain.document import *
@@ -48,7 +48,7 @@ def test_enum_values():
         "ENGLISH": "English",
     }
     assert {item.name: item.value for item in Response} == {
-        "KNOWN": "Known",
+        "AGAIN": "Again",
         "EASY": "Easy",
         "GOOD": "Good",
         "HARD": "Hard",
@@ -57,6 +57,8 @@ def test_enum_values():
         "KNOWN": "Known",
         "LEARNING": "Learning",
         "NEW": "New",
+        "RELEARNING": "Relearning",
+        "REVIEW": "Review",
         "SUSPENDED": "Suspended",
     }
     assert {item.name: item.value for item in POS} == {
@@ -145,14 +147,15 @@ def test_word_properties():
     assert word.image_path is None
     assert word.status is Status.NEW
     assert word.last_reviewed is None
+    assert word.step is None
     assert word.doc_part_words == []
     assert Word(word_id=31).lemma == ""
 
 
 def test_word_properties_can_be_updated():
     word = the_word()
-    review_date = date(2026, 7, 22)
-    due_date = date(2026, 7, 25)
+    review_date = datetime(2026, 7, 22, 12, 30, tzinfo=timezone.utc)
+    due_date = datetime(2026, 7, 25, 12, 30, tzinfo=timezone.utc)
 
     word.lemma = "문서들"
     word.due = due_date
@@ -161,6 +164,7 @@ def test_word_properties_can_be_updated():
     word.image_path = "images/document.png"
     word.status = Status.LEARNING
     word.last_reviewed = review_date
+    word.step = 1
     word.pos = POS.NOUN
 
     assert word.lemma == "문서들"
@@ -170,6 +174,7 @@ def test_word_properties_can_be_updated():
     assert word.image_path == "images/document.png"
     assert word.status is Status.LEARNING
     assert word.last_reviewed == review_date
+    assert word.step == 1
     assert word.pos is POS.NOUN
 
 

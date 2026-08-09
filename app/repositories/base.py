@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
+from datetime import datetime
 
 from app.domain.document import DocPart, Document
 from app.domain.enums import Language, POS
 from app.domain.user import User
-from app.domain.word import DocPartWord, Word, WordMeaning
+from app.domain.word import DocPartWord, Word, WordMeaning, WordReview
 
 
 class Repository(ABC):
@@ -66,6 +67,10 @@ class Repository(ABC):
         """Return document parts in reading order"""
 
     @abstractmethod
+    def activate_doc_part(self, user_id: int, doc_part_id: int) -> None:
+        """Make one of a user's document parts their only active part"""
+
+    @abstractmethod
     def save_word(self, user_id: int, word: Word) -> None:
         """Insert or update a word, assigning a generated ID when needed"""
 
@@ -82,6 +87,18 @@ class Repository(ABC):
         self, user_id: int, language: Language, lemmas: set[str]
     ) -> list[Word]:
         """Return a user's words matching the language and lemmas"""
+
+    @abstractmethod
+    def update_word_study(self, word: Word) -> None:
+        """Update scheduling fields for an existing word"""
+
+    @abstractmethod
+    def record_word_review(self, word: Word, review: WordReview) -> None:
+        """Update a word and append its review as one transaction"""
+
+    @abstractmethod
+    def list_word_reviews(self, word_id: int) -> list[WordReview]:
+        """Return a word's reviews in chronological and ID order"""
 
     @abstractmethod
     def save_word_meaning(self, word_id: int, meaning: WordMeaning) -> None:
@@ -106,8 +123,10 @@ class Repository(ABC):
         """Replace a source's shared lexicon meanings as one transaction"""
 
     @abstractmethod
-    def list_learning_words_in_active_parts(self, user_id: int) -> list[Word]:
-        """Return a user's learning words found in active document parts"""
+    def list_due_words_in_active_parts(
+        self, user_id: int, due_at: datetime
+    ) -> list[Word]:
+        """Return reviewable words due in a user's active document parts"""
 
     @abstractmethod
     def save_doc_part_word(self, association: DocPartWord) -> None:

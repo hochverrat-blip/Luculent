@@ -118,12 +118,14 @@ def test_mysql_uses_auto_increment_for_entity_tables(repository):
         SELECT TABLE_NAME, EXTRA
         FROM INFORMATION_SCHEMA.COLUMNS
         WHERE TABLE_SCHEMA = DATABASE()
-          AND TABLE_NAME IN ('users', 'documents', 'doc_parts', 'words')
+          AND TABLE_NAME IN (
+              'users', 'documents', 'doc_parts', 'words', 'word_reviews'
+          )
           AND COLUMN_KEY = 'PRI'
         ORDER BY TABLE_NAME
         """,
         (),
     )
 
-    assert len(rows) == 4
+    assert len(rows) == 5
     assert all("auto_increment" in row["EXTRA"] for row in rows)

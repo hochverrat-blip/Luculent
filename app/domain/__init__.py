@@ -8,7 +8,7 @@ from app.domain.enums import (
     Status,
 )
 from app.domain.user import User
-from app.domain.word import DocPartWord, Word, WordMeaning
+from app.domain.word import DocPartWord, Word, WordMeaning, WordReview
 
 __all__ = [
     "DocPart",
@@ -23,4 +23,5 @@ __all__ = [
     "User",
     "Word",
     "WordMeaning",
+    "WordReview",
 ]

@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Callable
 
 from app.domain.document import DocPart, Document
-from app.domain.enums import Language, MeaningFrequency, MeaningLabel, POS, Status
+from app.domain.enums import (
+    Language,
+    MeaningFrequency,
+    MeaningLabel,
+    POS,
+    Response,
+    Status,
+)
 from app.domain.user import User
-from app.domain.word import DocPartWord, Word, WordMeaning
+from app.domain.word import DocPartWord, Word, WordMeaning, WordReview
 from app.repositories.base import Repository
 from app.settings import Settings
 
@@ -100,12 +107,13 @@ class MySQLRepository(Repository):
                 word_id INT AUTO_INCREMENT PRIMARY KEY,
                 user_id INT NOT NULL,
                 lexicon_entry_id INT NOT NULL,
-                due DATE NULL,
+                due DATETIME(6) NULL,
                 difficulty DOUBLE NOT NULL DEFAULT 0.0,
                 stability DOUBLE NOT NULL DEFAULT 0.0,
                 image_path VARCHAR(1000) NULL,
                 status VARCHAR(50) NOT NULL,
-                last_reviewed DATE NULL,
+                last_reviewed DATETIME(6) NULL,
+                step INT NULL,
                 CONSTRAINT fk_words_user
                     FOREIGN KEY (user_id) REFERENCES users(user_id)
                     ON DELETE CASCADE,
@@ -129,6 +137,19 @@ class MySQLRepository(Repository):
                 CONSTRAINT fk_word_meanings_entry
                     FOREIGN KEY (lexicon_entry_id)
                     REFERENCES lexicon_entries(lexicon_entry_id)
+                    ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS word_reviews (
+                review_id INT AUTO_INCREMENT PRIMARY KEY,
+                word_id INT NOT NULL,
+                response VARCHAR(50) NOT NULL,
+                status_before VARCHAR(50) NOT NULL,
+                reviewed_at DATETIME(6) NOT NULL,
+                duration_ms INT NULL,
+                CONSTRAINT fk_word_reviews_word
+                    FOREIGN KEY (word_id) REFERENCES words(word_id)
                     ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
@@ -410,6 +431,40 @@ class MySQLRepository(Repository):
         )
         return [self._doc_part_from_row(row) for row in rows]
 
+    def activate_doc_part(self, user_id: int, doc_part_id: int) -> None:
+        cursor = self._connection.cursor()
+        try:
+            owned = self._fetch_one(
+                """
+                SELECT 1 AS owned
+                FROM doc_parts AS dp
+                INNER JOIN documents AS d ON d.document_id = dp.document_id
+                WHERE dp.doc_part_id = %s AND d.user_id = %s
+                """,
+                (doc_part_id, user_id),
+            )
+            if owned is None:
+                raise ValueError("Document part must belong to the user")
+            cursor.execute(
+                """
+                UPDATE doc_parts AS dp
+                INNER JOIN documents AS d ON d.document_id = dp.document_id
+                SET dp.active = FALSE
+                WHERE d.user_id = %s
+                """,
+                (user_id,),
+            )
+            cursor.execute(
+                "UPDATE doc_parts SET active = TRUE WHERE doc_part_id = %s",
+                (doc_part_id,),
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+        finally:
+            cursor.close()
+
     def save_word(self, user_id: int, word: Word) -> None:
         self._save_word(user_id, word, commit=True)
 
@@ -421,19 +476,20 @@ class MySQLRepository(Repository):
                     """
                     INSERT INTO words (
                         user_id, lexicon_entry_id, due, difficulty, stability,
-                        image_path, status, last_reviewed
+                        image_path, status, last_reviewed, step
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         user_id,
                         lexicon_entry_id,
-                        word.due,
+                        self._datetime_to_mysql(word.due),
                         word.difficulty,
                         word.stability,
                         word.image_path,
                         word.status.name,
-                        word.last_reviewed,
+                        self._datetime_to_mysql(word.last_reviewed),
+                        word.step,
                     ),
                     commit=commit,
                 )
@@ -443,9 +499,9 @@ class MySQLRepository(Repository):
             """
             INSERT INTO words (
                 word_id, user_id, lexicon_entry_id, due, difficulty,
-                stability, image_path, status, last_reviewed
+                stability, image_path, status, last_reviewed, step
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 user_id = VALUES(user_id),
                 lexicon_entry_id = VALUES(lexicon_entry_id),
@@ -454,18 +510,20 @@ class MySQLRepository(Repository):
                 stability = VALUES(stability),
                 image_path = VALUES(image_path),
                 status = VALUES(status),
-                last_reviewed = VALUES(last_reviewed)
+                last_reviewed = VALUES(last_reviewed),
+                step = VALUES(step)
             """,
             (
                 word.word_id,
                 user_id,
                 lexicon_entry_id,
-                word.due,
+                self._datetime_to_mysql(word.due),
                 word.difficulty,
                 word.stability,
                 word.image_path,
                 word.status.name,
-                word.last_reviewed,
+                self._datetime_to_mysql(word.last_reviewed),
+                word.step,
             ),
             commit=commit,
         )
@@ -521,6 +579,96 @@ class MySQLRepository(Repository):
             )
         rows.sort(key=lambda row: row["word_id"])
         return [self._word_from_row(row) for row in rows]
+
+    def update_word_study(self, word: Word) -> None:
+        if word.word_id is None:
+            raise ValueError("Word must be saved before recording a response")
+        try:
+            self._update_word_study(word)
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+
+    def record_word_review(self, word: Word, review: WordReview) -> None:
+        try:
+            self._update_word_study(word)
+            review._assign_id(
+                self._execute_insert(
+                    """
+                    INSERT INTO word_reviews (
+                        word_id, response, status_before, reviewed_at, duration_ms
+                    )
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        review.word_id,
+                        review.response.name,
+                        review.status_before.name,
+                        self._datetime_to_mysql(review.reviewed_at),
+                        review.duration_ms,
+                    ),
+                    commit=False,
+                )
+            )
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            review._assign_id(None)
+            raise
+
+    def list_word_reviews(self, word_id: int) -> list[WordReview]:
+        rows = self._fetch_all(
+            """
+            SELECT review_id, word_id, response, status_before, reviewed_at,
+                   duration_ms
+            FROM word_reviews
+            WHERE word_id = %s
+            ORDER BY reviewed_at, review_id
+            """,
+            (word_id,),
+        )
+        return [
+            WordReview(
+                row["review_id"],
+                row["word_id"],
+                Response[row["response"]],
+                Status[row["status_before"]],
+                self._mysql_to_datetime(row["reviewed_at"]),
+                row["duration_ms"],
+            )
+            for row in rows
+        ]
+
+    def _update_word_study(self, word: Word) -> None:
+        cursor = self._connection.cursor()
+        try:
+            cursor.execute(
+                """
+                UPDATE words
+                SET due = %s, difficulty = %s, stability = %s, status = %s,
+                    last_reviewed = %s, step = %s
+                WHERE word_id = %s
+                """,
+                (
+                    self._datetime_to_mysql(word.due),
+                    word.difficulty,
+                    word.stability,
+                    word.status.name,
+                    self._datetime_to_mysql(word.last_reviewed),
+                    word.step,
+                    word.word_id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                cursor.execute(
+                    "SELECT 1 FROM words WHERE word_id = %s",
+                    (word.word_id,),
+                )
+                if cursor.fetchone() is None:
+                    raise ValueError("Word must be saved before recording a response")
+        finally:
+            cursor.close()
 
     def save_word_meaning(self, word_id: int, meaning: WordMeaning) -> None:
         self._save_word_meaning(word_id, meaning, commit=True)
@@ -626,7 +774,9 @@ class MySQLRepository(Repository):
             meaning.labels.update(MeaningLabel[row["label"]] for row in labels)
         return meanings
 
-    def list_learning_words_in_active_parts(self, user_id: int) -> list[Word]:
+    def list_due_words_in_active_parts(
+        self, user_id: int, due_at: datetime
+    ) -> list[Word]:
         rows = self._fetch_all(
             """
             SELECT DISTINCT w.*, le.lemma, le.language, le.pos
@@ -638,11 +788,20 @@ class MySQLRepository(Repository):
             INNER JOIN documents AS d ON d.document_id = dp.document_id
             WHERE w.user_id = %s
               AND d.user_id = %s
-              AND w.status = %s
+              AND w.status IN (%s, %s, %s, %s)
+              AND (w.due IS NULL OR w.due <= %s)
               AND dp.active = TRUE
-            ORDER BY w.word_id
+            ORDER BY w.due IS NOT NULL, w.due, w.word_id
             """,
-            (user_id, user_id, Status.LEARNING.name),
+            (
+                user_id,
+                user_id,
+                Status.NEW.name,
+                Status.LEARNING.name,
+                Status.REVIEW.name,
+                Status.RELEARNING.name,
+                self._datetime_to_mysql(due_at),
+            ),
         )
         return [self._word_from_row(row) for row in rows]
 
@@ -903,12 +1062,15 @@ class MySQLRepository(Repository):
             language=Language[row["language"]],
             pos=POS[row["pos"]],
         )
-        word.due = MySQLRepository._optional_date(row["due"])
+        word.due = MySQLRepository._optional_datetime(row["due"])
         word.difficulty = float(row["difficulty"])
         word.stability = float(row["stability"])
         word.image_path = row["image_path"]
         word.status = Status[row["status"]]
-        word.last_reviewed = MySQLRepository._optional_date(row["last_reviewed"])
+        word.last_reviewed = MySQLRepository._optional_datetime(
+            row["last_reviewed"]
+        )
+        word.step = row["step"]
         word.meanings.extend(self.list_word_meanings(word.word_id))
         return word
 
@@ -930,3 +1092,18 @@ class MySQLRepository(Repository):
     @staticmethod
     def _optional_date(value: date | str | None) -> date | None:
         return None if value is None else MySQLRepository._as_date(value)
+
+    @staticmethod
+    def _datetime_to_mysql(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+    @staticmethod
+    def _mysql_to_datetime(value: datetime | str) -> datetime:
+        parsed = value if isinstance(value, datetime) else datetime.fromisoformat(value)
+        return parsed.replace(tzinfo=timezone.utc)
+
+    @staticmethod
+    def _optional_datetime(value: datetime | str | None) -> datetime | None:
+        return None if value is None else MySQLRepository._mysql_to_datetime(value)

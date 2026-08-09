@@ -1,10 +1,17 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import datetime
 from typing import TYPE_CHECKING
 from typing import Optional
 
-from app.domain.enums import Language, MeaningFrequency, MeaningLabel, POS, Status
+from app.domain.enums import (
+    Language,
+    MeaningFrequency,
+    MeaningLabel,
+    POS,
+    Response,
+    Status,
+)
 
 if TYPE_CHECKING:
     from app.domain.document import DocPart
@@ -19,12 +26,13 @@ class Word:
     ):
         self._word_id = word_id
         self._lemma = lemma
-        self._due: Optional[date] = None
+        self._due: Optional[datetime] = None
         self._difficulty = 0.0
         self._stability = 0.0
         self._image_path: Optional[str] = None
         self._status = Status.NEW
-        self._last_reviewed: Optional[date] = None
+        self._last_reviewed: Optional[datetime] = None
+        self._step: int | None = None
         self._pos = pos
         self._language = language
 
@@ -47,11 +55,11 @@ class Word:
         self._lemma = value
 
     @property
-    def due(self) -> Optional[date]:
+    def due(self) -> Optional[datetime]:
         return self._due
 
     @due.setter
-    def due(self, value: Optional[date]) -> None:
+    def due(self, value: Optional[datetime]) -> None:
         self._due = value
 
     @property
@@ -87,12 +95,20 @@ class Word:
         self._status = value
 
     @property
-    def last_reviewed(self) -> Optional[date]:
+    def last_reviewed(self) -> Optional[datetime]:
         return self._last_reviewed
 
     @last_reviewed.setter
-    def last_reviewed(self, value: Optional[date]) -> None:
+    def last_reviewed(self, value: Optional[datetime]) -> None:
         self._last_reviewed = value
+
+    @property
+    def step(self) -> int | None:
+        return self._step
+
+    @step.setter
+    def step(self, value: int | None) -> None:
+        self._step = value
 
     @property
     def pos(self) -> POS:
@@ -208,3 +224,48 @@ class DocPartWord:
     @property
     def occurrences(self) -> int:
         return self._occurrences
+
+
+class WordReview:
+    def __init__(
+        self,
+        review_id: int | None,
+        word_id: int,
+        response: Response,
+        status_before: Status,
+        reviewed_at: datetime,
+        duration_ms: int | None = None,
+    ):
+        self._review_id = review_id
+        self._word_id = word_id
+        self._response = response
+        self._status_before = status_before
+        self._reviewed_at = reviewed_at
+        self._duration_ms = duration_ms
+
+    def _assign_id(self, review_id: int) -> None:
+        self._review_id = review_id
+
+    @property
+    def review_id(self) -> int | None:
+        return self._review_id
+
+    @property
+    def word_id(self) -> int:
+        return self._word_id
+
+    @property
+    def response(self) -> Response:
+        return self._response
+
+    @property
+    def status_before(self) -> Status:
+        return self._status_before
+
+    @property
+    def reviewed_at(self) -> datetime:
+        return self._reviewed_at
+
+    @property
+    def duration_ms(self) -> int | None:
+        return self._duration_ms

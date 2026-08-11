@@ -12,7 +12,13 @@ from app.domain.enums import (
     Status,
 )
 from app.domain.user import User
-from app.domain.word import DocPartWord, Word, WordMeaning, WordReview
+from app.domain.word import (
+    DocPartWord,
+    UserWordMeaning,
+    Word,
+    WordMeaning,
+    WordReview,
+)
 from app.repositories import Repository
 
 
@@ -42,6 +48,12 @@ class RepositoryContract:
         assert repository.delete_user(loaded.user_id) is False
         assert repository.get_user(102) is None
 
+    def test_lists_users_by_name(self, repository):
+        repository.save_user(User(103, "Zora"))
+        repository.save_user(User(104, "Anna"))
+
+        assert [user.user_id for user in repository.list_users()] == [104, 103]
+
     def test_documents_and_parts_round_trip_in_reading_order(self, repository):
         repository.save_user(User(201, "Reader"))
         document = Document(
@@ -67,6 +79,8 @@ class RepositoryContract:
         assert [part.doc_part_id for part in loaded.doc_parts] == [203, 204]
         assert loaded.doc_parts[0].active is True
         assert loaded.doc_parts[0].readability == pytest.approx(0.75)
+        assert repository.get_users_doc_part(201, 203).doc_part_id == 203
+        assert repository.get_users_doc_part(999, 203) is None
         assert repository.get_document(2147483000) is None
 
     def test_document_and_parts_are_saved_atomically(self, repository):
@@ -148,6 +162,27 @@ class RepositoryContract:
 
         assert [document.document_id for document in documents] == [302]
         assert [word.word_id for word in words] == [303]
+
+    def test_deleting_document_removes_its_parts_but_keeps_user_words(
+        self, repository
+    ):
+        repository.save_user(User(311, "Reader"))
+        repository.save_user(User(312, "Other Reader"))
+        document = Document(313, "Finished", "A word.", Language.ENGLISH)
+        part = DocPart(314, "A word.", 0)
+        word = Word(315, "word")
+        repository.save_document(311, document)
+        repository.save_doc_part(313, part)
+        repository.save_word(311, word)
+        repository.save_doc_part_word(DocPartWord(word, part, 1))
+
+        assert repository.delete_document(312, 313) is False
+        assert repository.delete_document(311, 313) is True
+        assert repository.delete_document(311, 313) is False
+        assert repository.get_document(313) is None
+        assert repository.list_doc_parts(313) == []
+        assert repository.list_doc_part_words(314) == []
+        assert [stored.word_id for stored in repository.list_words(311)] == [315]
 
     def test_word_round_trip_preserves_all_persistent_fields(self, repository):
         repository.save_user(User(401, "Vance"))
@@ -272,6 +307,35 @@ class RepositoryContract:
         assert first_meaning.meaning_id == second_meaning.meaning_id
         assert first_meaning.gloss == second_meaning.gloss == "boat"
 
+    def test_user_meanings_are_owned_by_one_users_word(self, repository):
+        repository.save_user(User(431, "Reader"))
+        repository.save_user(User(432, "Other Reader"))
+        word = Word(433, "배", Language.KOREAN, POS.NOUN)
+        repository.save_word(431, word)
+        repository.save_word_meaning(433, WordMeaning(None, gloss="boat"))
+        meaning = UserWordMeaning(
+            None,
+            433,
+            korean_definition="내가 외울 뜻",
+            english_definition="my definition",
+            gloss="mine",
+        )
+
+        repository.save_user_word_meaning(431, meaning)
+        loaded = repository.get_word(433)
+
+        assert isinstance(meaning.user_meaning_id, int)
+        assert [item.gloss for item in loaded.meanings] == ["boat"]
+        assert [item.gloss for item in loaded.user_meanings] == ["mine"]
+        assert repository.delete_user_word_meaning(
+            432, meaning.user_meaning_id
+        ) is False
+        assert repository.delete_user_word_meaning(
+            431, meaning.user_meaning_id
+        ) is True
+        assert repository.get_word(433).meanings[0].gloss == "boat"
+        assert repository.get_word(433).user_meanings == []
+
     def test_doc_part_word_round_trip(self, repository):
         repository.save_user(User(501, "Vance"))
         repository.save_document(
@@ -284,12 +348,16 @@ class RepositoryContract:
         repository.save_doc_part_word(DocPartWord(word, doc_part, 4))
 
         associations = repository.list_doc_part_words(503)
+        users_associations = repository.list_users_doc_part_words(501)
         assert len(associations) == 1
         assert associations[0].word.word_id == 504
         assert associations[0].doc_part.doc_part_id == 503
         assert associations[0].occurrences == 4
+        assert len(users_associations) == 1
+        assert users_associations[0].word.word_id == 504
+        assert users_associations[0].doc_part.doc_part_id == 503
 
-    def test_lists_only_due_words_in_users_active_parts(self, repository):
+    def test_gets_due_words_in_users_active_parts_one_at_a_time(self, repository):
         repository.save_user(User(601, "Reader"))
         repository.save_user(User(602, "Other Reader"))
         repository.save_document(
@@ -321,11 +389,32 @@ class RepositoryContract:
         repository.save_doc_part_word(DocPartWord(new_word, active_part, 1))
         repository.save_doc_part_word(DocPartWord(future, active_part, 1))
 
-        words = repository.list_due_words_in_active_parts(
+        assert repository.get_user_word(601, included.word_id).word_id == 606
+        assert repository.get_user_word(602, included.word_id) is None
+        assert repository.count_due_words_in_active_parts(
+            601, datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+        ) == 2
+
+        first = repository.get_due_word_in_active_parts(
             601, datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
         )
+        first.status = Status.KNOWN
+        repository.update_word_study(first)
+        second = repository.get_due_word_in_active_parts(
+            601,
+            datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc),
+            first.word_id,
+        )
+        second.status = Status.KNOWN
+        repository.update_word_study(second)
 
-        assert [word.word_id for word in words] == [608, 606]
+        assert {first.word_id, second.word_id} == {606, 608}
+        assert repository.get_due_word_in_active_parts(
+            601, datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+        ) is None
+        assert repository.count_due_words_in_active_parts(
+            601, datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+        ) == 0
 
     def test_updates_only_word_study_fields(self, repository):
         repository.save_user(User(621, "Reader"))

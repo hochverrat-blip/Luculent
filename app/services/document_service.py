@@ -19,9 +19,10 @@ from app.domain import (
     User,
     Word,
 )
-from app.lexicon import ensure_lexicon
+from app.lexicon import KOREAN_LEXICON_SOURCE, ensure_lexicon
 from app.scraper import Scraper
 from app.services.base_service import Service
+from app.services.word_service import WordService
 
 
 SUPPORTED_DOCUMENT_LANGUAGES = {
@@ -92,7 +93,36 @@ class DocumentService(Service):
 
     def get_documents(self, user: User) -> list[Document]:
         self._require_saved_user(user)
-        return self._repository.list_documents(user.user_id)
+        documents = self._repository.list_documents(user.user_id)
+        associations_by_part: dict[int, list[DocPartWord]] = {}
+        for association in self._repository.list_users_doc_part_words(user.user_id):
+            associations_by_part.setdefault(
+                association.doc_part.doc_part_id, []
+            ).append(association)
+        for document in documents:
+            for part in document.doc_parts:
+                part.readability = self._calculate_readability(
+                    part, associations_by_part.get(part.doc_part_id, [])
+                )
+        return documents
+
+    def get_docpart(self, user: User, doc_part_id: int) -> DocPart | None:
+        self._require_saved_user(user)
+        return self._repository.get_users_doc_part(user.user_id, doc_part_id)
+
+    def delete_document(self, user: User, document: Document) -> bool:
+        self._require_saved_user(user)
+        if document.document_id is None:
+            raise ValueError("Document must be saved before deletion")
+        return self._repository.delete_document(user.user_id, document.document_id)
+
+    def is_lexicon_installed(self, language: Language) -> bool:
+        if language is not Language.KOREAN:
+            return False
+        return (
+            self._repository.get_lexicon_version(KOREAN_LEXICON_SOURCE)
+            is not None
+        )
 
     def activate_docpart(self, user: User, docpart: DocPart) -> None:
         self._require_saved_user(user)
@@ -218,6 +248,24 @@ class DocumentService(Service):
     def _require_saved_user(self, user: User) -> None:
         if user.user_id is None or self._repository.get_user(user.user_id) is None:
             raise ValueError("User must be saved before accessing documents")
+
+    @staticmethod
+    def _calculate_readability(
+        part: DocPart, associations: list[DocPartWord]
+    ) -> float:
+        tracked_occurrences = sum(
+            association.occurrences for association in associations
+        )
+        total_words = max(len(part.text.split()), tracked_occurrences)
+        if total_words == 0:
+            return 1.0
+        retrievable = total_words - tracked_occurrences
+        retrievable += sum(
+            WordService.get_projected_retrievability(association.word)
+            * association.occurrences
+            for association in associations
+        )
+        return retrievable / total_words
 
     def _build_document(self, title: str, text: str) -> Document:
         if not text.strip():

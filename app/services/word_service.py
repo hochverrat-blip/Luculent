@@ -1,12 +1,20 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fsrs import Card, Rating, Scheduler, State
 
-from app.domain import Response, Status, User, Word, WordReview
+from app.domain import (
+    Response,
+    Status,
+    User,
+    UserWordMeaning,
+    Word,
+    WordReview,
+)
 from app.services.base_service import Service
 
 
 _SCHEDULER = Scheduler()
+_READABILITY_HORIZON = timedelta(days=7)
 
 _RATINGS = {
     Response.AGAIN: Rating.Again,
@@ -31,13 +39,66 @@ _WORD_STATUSES = {
 
 class WordService(Service):
 
-    def get_due(self, user: User) -> list[Word]:
+    def get_word(self, user: User, word_id: int) -> Word | None:
+        if user.user_id is None or self._repository.get_user(user.user_id) is None:
+            raise ValueError("User must be saved before getting a word")
+        return self._repository.get_user_word(user.user_id, word_id)
+
+    def add_user_meaning(
+        self,
+        user: User,
+        word_id: int,
+        korean_definition: str = "",
+        english_definition: str = "",
+        gloss: str = "",
+    ) -> UserWordMeaning:
+        if user.user_id is None or self._repository.get_user(user.user_id) is None:
+            raise ValueError("User must be saved before adding a meaning")
+        values = tuple(
+            value.strip()
+            for value in (korean_definition, english_definition, gloss)
+        )
+        if not any(values):
+            raise ValueError("At least one definition or gloss is required")
+        meaning = UserWordMeaning(None, word_id, *values)
+        self._repository.save_user_word_meaning(user.user_id, meaning)
+        return meaning
+
+    def delete_user_meaning(self, user: User, user_meaning_id: int) -> bool:
+        if user.user_id is None or self._repository.get_user(user.user_id) is None:
+            raise ValueError("User must be saved before deleting a meaning")
+        return self._repository.delete_user_word_meaning(
+            user.user_id, user_meaning_id
+        )
+
+    def get_due(
+        self, user: User, exclude_word_id: int | None = None
+    ) -> Word | None:
         if user.user_id is None or self._repository.get_user(user.user_id) is None:
             raise ValueError("User must be saved before getting due words")
 
         now = datetime.now(timezone.utc)
-        return self._repository.list_due_words_in_active_parts(
-            user.user_id, now
+        return self._repository.get_due_word_in_active_parts(
+            user.user_id, now, exclude_word_id
+        )
+
+    def count_due(self, user: User) -> int:
+        if user.user_id is None or self._repository.get_user(user.user_id) is None:
+            raise ValueError("User must be saved before counting due words")
+        return self._repository.count_due_words_in_active_parts(
+            user.user_id, datetime.now(timezone.utc)
+        )
+
+    @staticmethod
+    def get_projected_retrievability(word: Word) -> float:
+        if word.status in {Status.KNOWN, Status.SUSPENDED}:
+            return 1.0
+        if word.status is Status.NEW:
+            return 0.0
+        now = datetime.now(timezone.utc)
+        card = WordService._fsrs_card(word, now)
+        return _SCHEDULER.get_card_retrievability(
+            card, current_datetime=now + _READABILITY_HORIZON
         )
 
     def record_response(
@@ -55,15 +116,7 @@ class WordService(Service):
 
         reviewed_at = datetime.now(timezone.utc)
         status_before = word.status
-        card = Card(
-            card_id=word.word_id,
-            state=_FSRS_STATES[word.status],
-            step=0 if word.status is Status.NEW else word.step,
-            stability=word.stability if word.stability > 0 else None,
-            difficulty=word.difficulty if word.difficulty > 0 else None,
-            due=word.due or reviewed_at,
-            last_review=word.last_reviewed,
-        )
+        card = self._fsrs_card(word, reviewed_at)
         card, _ = _SCHEDULER.review_card(
             card,
             _RATINGS[response],
@@ -95,3 +148,15 @@ class WordService(Service):
         word.step = None
         word.due = None
         self._repository.update_word_study(word)
+
+    @staticmethod
+    def _fsrs_card(word: Word, now: datetime) -> Card:
+        return Card(
+            card_id=word.word_id,
+            state=_FSRS_STATES[word.status],
+            step=0 if word.status is Status.NEW else word.step,
+            stability=word.stability if word.stability > 0 else None,
+            difficulty=word.difficulty if word.difficulty > 0 else None,
+            due=word.due or now,
+            last_review=word.last_reviewed,
+        )

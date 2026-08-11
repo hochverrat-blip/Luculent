@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Luculent</title>
+    <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <main>
+        <section id="user-screen" class="centered-panel">
+            <p class="eyebrow">Luculent</p>
+            <h1>Read what you want.<br>Learn what you need.</h1>
+            <p class="muted">Choose a profile or create one to begin.</p>
+            <div id="user-list" class="user-grid"></div>
+            <form id="create-user-form" class="inline-form">
+                <input id="new-username" placeholder="New user name" required>
+                <button class="primary" type="submit">Create user</button>
+            </form>
+        </section>
+
+        <section id="application" hidden>
+            <header class="app-header">
+                <button id="brand" class="text-button">Luculent</button>
+                <nav>
+                    <button class="nav-button active" data-view="dashboard">Library</button>
+                    <button class="nav-button" data-view="study">Study</button>
+                </nav>
+                <button id="switch-user" class="profile-button"></button>
+            </header>
+
+            <section id="dashboard-view" class="view page-width">
+                <div class="hero-row">
+                    <div>
+                        <p class="eyebrow">Your library</p>
+                        <h2 id="welcome-heading"></h2>
+                    </div>
+                    <button id="study-now" class="due-card">
+                        <span id="due-count">0</span>
+                        <small>words due now</small>
+                    </button>
+                </div>
+
+                <details class="import-panel">
+                    <summary>Import a new Korean reading</summary>
+                    <div class="import-grid">
+                        <form id="url-form">
+                            <label for="document-url">Web article</label>
+                            <input id="document-url" type="url" placeholder="https://…" required>
+                            <button class="primary" type="submit">Import URL</button>
+                        </form>
+                        <form id="file-form">
+                            <label for="document-file">Text file</label>
+                            <input id="document-file" type="file" accept=".txt,text/plain" required>
+                            <button class="primary" type="submit">Import file</button>
+                        </form>
+                    </div>
+                    <p id="import-status" class="status" aria-live="polite"></p>
+                </details>
+
+                <div class="section-heading">
+                    <h3>Documents</h3>
+                    <button id="refresh-dashboard" class="text-button">Refresh</button>
+                </div>
+                <div id="document-list" class="document-list"></div>
+            </section>
+
+            <section id="reader-view" class="view page-width" hidden>
+                <div class="reader-toolbar">
+                    <button id="reader-back" class="text-button">← Back to library</button>
+                    <div class="reader-navigation">
+                        <button id="previous-part">← Previous part</button>
+                        <button id="next-part">Next part →</button>
+                    </div>
+                </div>
+                <div class="reader-heading">
+                    <div>
+                        <p id="reader-position" class="eyebrow"></p>
+                        <h2 id="reader-title"></h2>
+                    </div>
+                    <button id="activate-reading" class="primary"></button>
+                </div>
+                <div id="reader-loading" class="loading-card">
+                    <span class="spinner" aria-hidden="true"></span>
+                    <div>
+                        <strong id="reader-loading-title">Preparing this reading</strong>
+                        <p id="reader-loading-message">Analyzing the text against your vocabulary…</p>
+                    </div>
+                </div>
+                <article id="reader-text" class="reading-text" hidden></article>
+            </section>
+
+            <section id="study-view" class="view study-layout" hidden>
+                <div class="study-heading">
+                    <div>
+                        <p class="eyebrow">Vocabulary review</p>
+                        <h2>Study due words</h2>
+                    </div>
+                    <span><strong id="study-due-count">0</strong> due</span>
+                </div>
+                <div id="study-empty" class="empty-state" hidden>
+                    <h3>Nothing is due right now</h3>
+                    <p>Activate a reading section or return later for scheduled reviews.</p>
+                </div>
+                <div id="study-card" class="study-card" hidden>
+                    <div class="study-columns">
+                        <div class="study-prompt">
+                            <p id="word-meta" class="eyebrow"></p>
+                            <h3 id="study-word"></h3>
+                            <button id="reveal-answer" class="primary">Show meanings</button>
+                            <div id="rating-row" class="rating-row" hidden>
+                                <button data-response="Again" class="again">Again</button>
+                                <button data-response="Hard">Hard</button>
+                                <button data-response="Good" class="primary">Good</button>
+                                <button data-response="Easy">Easy</button>
+                                <button data-response="Known" class="known">Known</button>
+                            </div>
+                        </div>
+                        <div id="answer" hidden>
+                            <div id="meaning-list"></div>
+                            <details class="add-meaning">
+                                <summary>Add your own meaning</summary>
+                                <form id="meaning-form" class="meaning-form">
+                                    <input id="gloss" placeholder="Short gloss">
+                                    <textarea id="english-definition" placeholder="English definition"></textarea>
+                                    <textarea id="korean-definition" placeholder="Korean definition"></textarea>
+                                    <button type="submit">Add meaning</button>
+                                </form>
+                            </details>
+                        </div>
+                    </div>
+                </div>
+                <p id="study-status" class="status" aria-live="polite"></p>
+            </section>
+        </section>
+    </main>
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

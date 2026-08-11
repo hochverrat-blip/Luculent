@@ -15,10 +15,13 @@ def _feature(att, val):
     return {"att": att, "val": val}
 
 
-def _entry(lemma, pos, senses):
+def _entry(lemma, pos, senses, level=None):
+    features = [_feature("partOfSpeech", pos)]
+    if level is not None:
+        features.append(_feature("vocabularyLevel", level))
     return {
         "Lemma": {"feat": _feature("writtenForm", lemma)},
-        "feat": [_feature("partOfSpeech", pos)],
+        "feat": features,
         "Sense": [
             {
                 "feat": _feature("definition", korean),
@@ -98,7 +101,7 @@ def test_manager_installs_shared_lexicon_once(repository, monkeypatch):
     assert [meaning.gloss for meaning in meanings] == ["stomach", "boat"]
     assert meanings[0].korean_definition == "사람의 몸통 가운데 부분."
     assert meanings[0].english_definition == "The abdomen."
-    assert [meaning.display_order for meaning in meanings] == [0, 1]
+    assert [meaning.display_order for meaning in meanings] == [3_000_000, 3_000_001]
     assert all(isinstance(meaning.meaning_id, int) for meaning in meanings)
 
 
@@ -138,6 +141,47 @@ def test_shared_lexicon_filters_by_part_of_speech(repository, monkeypatch):
         "double"
     ]
     assert repository.get_word(missing.word_id).meanings == []
+
+
+def test_meanings_are_ordered_by_vocabulary_level(repository, monkeypatch):
+    data = {
+        "LexicalResource": {
+            "Lexicon": {
+                "LexicalEntry": [
+                    _entry(
+                        "열리다",
+                        "동사",
+                        [("열매가 맺히다.", "To produce fruit.", "fruit")],
+                        "중급",
+                    ),
+                    _entry(
+                        "열리다",
+                        "동사",
+                        [
+                            ("닫힌 것이 풀리다.", "To become open.", "open"),
+                            ("회의가 시작되다.", "To take place.", "take place"),
+                        ],
+                        "초급",
+                    ),
+                ]
+            }
+        }
+    }
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("levels.json", json.dumps(data, ensure_ascii=False))
+    _configure_download(monkeypatch, archive.getvalue())
+
+    LexiconManager().ensure_installed(repository, Language.KOREAN)
+    repository.save_user(User(1, "Reader"))
+    word = Word(None, "열리다", Language.KOREAN, POS.VERB)
+    repository.save_word(1, word)
+
+    assert [meaning.gloss for meaning in repository.get_word(word.word_id).meanings] == [
+        "open",
+        "take place",
+        "fruit",
+    ]
 
 
 def test_manager_rejects_languages_without_a_lexicon(repository):

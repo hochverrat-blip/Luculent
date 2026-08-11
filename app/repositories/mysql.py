@@ -14,7 +14,13 @@ from app.domain.enums import (
     Status,
 )
 from app.domain.user import User
-from app.domain.word import DocPartWord, Word, WordMeaning, WordReview
+from app.domain.word import (
+    DocPartWord,
+    UserWordMeaning,
+    Word,
+    WordMeaning,
+    WordReview,
+)
 from app.repositories.base import Repository
 from app.settings import Settings
 
@@ -154,6 +160,19 @@ class MySQLRepository(Repository):
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             """
+            CREATE TABLE IF NOT EXISTS user_word_meanings (
+                user_meaning_id INT AUTO_INCREMENT PRIMARY KEY,
+                word_id INT NOT NULL,
+                korean_definition TEXT NOT NULL,
+                english_definition TEXT NOT NULL,
+                gloss VARCHAR(500) NOT NULL,
+                display_order INT NOT NULL,
+                CONSTRAINT fk_user_word_meanings_word
+                    FOREIGN KEY (word_id) REFERENCES words(word_id)
+                    ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """,
+            """
             CREATE TABLE IF NOT EXISTS word_meaning_labels (
                 meaning_id INT NOT NULL,
                 label VARCHAR(50) NOT NULL,
@@ -241,6 +260,12 @@ class MySQLRepository(Repository):
             (name,),
         )
         return None if row is None else self.get_user(row["user_id"])
+
+    def list_users(self) -> list[User]:
+        rows = self._fetch_all(
+            "SELECT user_id FROM users ORDER BY name, user_id", ()
+        )
+        return [self.get_user(row["user_id"]) for row in rows]
 
     def delete_user(self, user_id: int) -> bool:
         return self._execute_delete(
@@ -369,6 +394,12 @@ class MySQLRepository(Repository):
         )
         return [self._document_from_row(row) for row in rows]
 
+    def delete_document(self, user_id: int, document_id: int) -> bool:
+        return self._execute_delete(
+            "DELETE FROM documents WHERE document_id = %s AND user_id = %s",
+            (document_id, user_id),
+        )
+
     def save_doc_part(self, document_id: int, doc_part: DocPart) -> None:
         self._save_doc_part(document_id, doc_part, commit=True)
 
@@ -430,6 +461,18 @@ class MySQLRepository(Repository):
             (document_id,),
         )
         return [self._doc_part_from_row(row) for row in rows]
+
+    def get_users_doc_part(self, user_id: int, doc_part_id: int) -> DocPart | None:
+        row = self._fetch_one(
+            """
+            SELECT dp.doc_part_id, dp.text, dp.position, dp.readability, dp.active
+            FROM doc_parts AS dp
+            INNER JOIN documents AS d ON d.document_id = dp.document_id
+            WHERE d.user_id = %s AND dp.doc_part_id = %s
+            """,
+            (user_id, doc_part_id),
+        )
+        return None if row is None else self._doc_part_from_row(row)
 
     def activate_doc_part(self, user_id: int, doc_part_id: int) -> None:
         cursor = self._connection.cursor()
@@ -541,6 +584,19 @@ class MySQLRepository(Repository):
         )
         return None if row is None else self._word_from_row(row)
 
+    def get_user_word(self, user_id: int, word_id: int) -> Word | None:
+        row = self._fetch_one(
+            """
+            SELECT w.*, le.lemma, le.language, le.pos
+            FROM words AS w
+            INNER JOIN lexicon_entries AS le
+                ON le.lexicon_entry_id = w.lexicon_entry_id
+            WHERE w.user_id = %s AND w.word_id = %s
+            """,
+            (user_id, word_id),
+        )
+        return None if row is None else self._word_from_row(row)
+
     def list_words(self, user_id: int) -> list[Word]:
         rows = self._fetch_all(
             """
@@ -578,7 +634,7 @@ class MySQLRepository(Repository):
                 )
             )
         rows.sort(key=lambda row: row["word_id"])
-        return [self._word_from_row(row) for row in rows]
+        return [self._word_study_from_row(row) for row in rows]
 
     def update_word_study(self, word: Word) -> None:
         if word.word_id is None:
@@ -774,10 +830,98 @@ class MySQLRepository(Repository):
             meaning.labels.update(MeaningLabel[row["label"]] for row in labels)
         return meanings
 
-    def list_due_words_in_active_parts(
-        self, user_id: int, due_at: datetime
-    ) -> list[Word]:
+    def save_user_word_meaning(
+        self, user_id: int, meaning: UserWordMeaning
+    ) -> None:
+        owned = self._fetch_one(
+            "SELECT 1 AS owned FROM words WHERE word_id = %s AND user_id = %s",
+            (meaning.word_id, user_id),
+        )
+        if owned is None:
+            raise ValueError("Word must belong to the user")
+        if meaning.user_meaning_id is None:
+            meaning._assign_id(
+                self._execute_insert(
+                    """
+                    INSERT INTO user_word_meanings (
+                        word_id, korean_definition, english_definition, gloss,
+                        display_order
+                    )
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        meaning.word_id,
+                        meaning.korean_definition,
+                        meaning.english_definition,
+                        meaning.gloss,
+                        meaning.display_order,
+                    ),
+                )
+            )
+            return
+        cursor = self._connection.cursor()
+        try:
+            cursor.execute(
+                """
+                UPDATE user_word_meanings
+                SET korean_definition = %s, english_definition = %s, gloss = %s,
+                    display_order = %s
+                WHERE user_meaning_id = %s AND word_id = %s
+                """,
+                (
+                    meaning.korean_definition,
+                    meaning.english_definition,
+                    meaning.gloss,
+                    meaning.display_order,
+                    meaning.user_meaning_id,
+                    meaning.word_id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError("User meaning must belong to the word")
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+        finally:
+            cursor.close()
+
+    def list_user_word_meanings(self, word_id: int) -> list[UserWordMeaning]:
         rows = self._fetch_all(
+            """
+            SELECT *
+            FROM user_word_meanings
+            WHERE word_id = %s
+            ORDER BY display_order, user_meaning_id
+            """,
+            (word_id,),
+        )
+        return [self._user_word_meaning_from_row(row) for row in rows]
+
+    def delete_user_word_meaning(self, user_id: int, user_meaning_id: int) -> bool:
+        cursor = self._connection.cursor()
+        try:
+            cursor.execute(
+                """
+                DELETE FROM user_word_meanings
+                WHERE user_meaning_id = %s
+                  AND word_id IN (SELECT word_id FROM words WHERE user_id = %s)
+                """,
+                (user_meaning_id, user_id),
+            )
+            deleted = cursor.rowcount > 0
+            self._connection.commit()
+            return deleted
+        except Exception:
+            self._connection.rollback()
+            raise
+        finally:
+            cursor.close()
+
+    def get_due_word_in_active_parts(
+        self, user_id: int, due_at: datetime, exclude_word_id: int | None = None
+    ) -> Word | None:
+        row = self._fetch_one(
             """
             SELECT DISTINCT w.*, le.lemma, le.language, le.pos
             FROM words AS w
@@ -791,7 +935,39 @@ class MySQLRepository(Repository):
               AND w.status IN (%s, %s, %s, %s)
               AND (w.due IS NULL OR w.due <= %s)
               AND dp.active = TRUE
-            ORDER BY w.due IS NOT NULL, w.due, w.word_id
+              AND (%s IS NULL OR w.word_id <> %s)
+            ORDER BY RAND()
+            LIMIT 1
+            """,
+            (
+                user_id,
+                user_id,
+                Status.NEW.name,
+                Status.LEARNING.name,
+                Status.REVIEW.name,
+                Status.RELEARNING.name,
+                self._datetime_to_mysql(due_at),
+                exclude_word_id,
+                exclude_word_id,
+            ),
+        )
+        return None if row is None else self._word_from_row(row)
+
+    def count_due_words_in_active_parts(
+        self, user_id: int, due_at: datetime
+    ) -> int:
+        row = self._fetch_one(
+            """
+            SELECT COUNT(DISTINCT w.word_id) AS word_count
+            FROM words AS w
+            INNER JOIN doc_part_words AS dpw ON dpw.word_id = w.word_id
+            INNER JOIN doc_parts AS dp ON dp.doc_part_id = dpw.doc_part_id
+            INNER JOIN documents AS d ON d.document_id = dp.document_id
+            WHERE w.user_id = %s
+              AND d.user_id = %s
+              AND w.status IN (%s, %s, %s, %s)
+              AND (w.due IS NULL OR w.due <= %s)
+              AND dp.active = TRUE
             """,
             (
                 user_id,
@@ -803,7 +979,7 @@ class MySQLRepository(Repository):
                 self._datetime_to_mysql(due_at),
             ),
         )
-        return [self._word_from_row(row) for row in rows]
+        return row["word_count"]
 
     def save_doc_part_word(self, association: DocPartWord) -> None:
         self._save_doc_part_word(association, commit=True)
@@ -859,6 +1035,32 @@ class MySQLRepository(Repository):
         return [
             DocPartWord(
                 word=self._word_from_row(row),
+                doc_part=self._doc_part_from_row(row),
+                occurrences=row["occurrences"],
+            )
+            for row in rows
+        ]
+
+    def list_users_doc_part_words(self, user_id: int) -> list[DocPartWord]:
+        rows = self._fetch_all(
+            """
+            SELECT dpw.occurrences, dp.doc_part_id, dp.text, dp.position,
+                   dp.readability, dp.active, w.*,
+                   le.lemma, le.language, le.pos
+            FROM documents AS d
+            INNER JOIN doc_parts AS dp ON dp.document_id = d.document_id
+            INNER JOIN doc_part_words AS dpw ON dpw.doc_part_id = dp.doc_part_id
+            INNER JOIN words AS w ON w.word_id = dpw.word_id
+            INNER JOIN lexicon_entries AS le
+                ON le.lexicon_entry_id = w.lexicon_entry_id
+            WHERE d.user_id = %s
+            ORDER BY dp.doc_part_id, w.word_id
+            """,
+            (user_id,),
+        )
+        return [
+            DocPartWord(
+                word=self._word_study_from_row(row),
                 doc_part=self._doc_part_from_row(row),
                 occurrences=row["occurrences"],
             )
@@ -1056,6 +1258,13 @@ class MySQLRepository(Repository):
         )
 
     def _word_from_row(self, row: dict[str, Any]) -> Word:
+        word = self._word_study_from_row(row)
+        word.meanings.extend(self.list_word_meanings(word.word_id))
+        word.user_meanings.extend(self.list_user_word_meanings(word.word_id))
+        return word
+
+    @staticmethod
+    def _word_study_from_row(row: dict[str, Any]) -> Word:
         word = Word(
             word_id=row["word_id"],
             lemma=row["lemma"],
@@ -1071,7 +1280,6 @@ class MySQLRepository(Repository):
             row["last_reviewed"]
         )
         word.step = row["step"]
-        word.meanings.extend(self.list_word_meanings(word.word_id))
         return word
 
     @staticmethod
@@ -1082,6 +1290,17 @@ class MySQLRepository(Repository):
             english_definition=row["english_definition"],
             gloss=row["gloss"],
             frequency=MeaningFrequency[row["frequency"]],
+            display_order=row["display_order"],
+        )
+
+    @staticmethod
+    def _user_word_meaning_from_row(row: dict[str, Any]) -> UserWordMeaning:
+        return UserWordMeaning(
+            user_meaning_id=row["user_meaning_id"],
+            word_id=row["word_id"],
+            korean_definition=row["korean_definition"],
+            english_definition=row["english_definition"],
+            gloss=row["gloss"],
             display_order=row["display_order"],
         )
 

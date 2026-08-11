@@ -25,13 +25,15 @@ class Settings:
         *,
         use_defaults_when_missing: bool = False,
     ) -> Settings:
-        settings_path = Path(path) if path is not None else DEFAULT_SETTINGS_PATH
+        settings_path = (
+            Path(path).resolve() if path is not None else DEFAULT_SETTINGS_PATH.resolve()
+        )
         if not settings_path.exists():
             example_path = settings_path.with_name("settings.example.txt")
             if example_path.exists():
                 copyfile(example_path, settings_path)
             elif use_defaults_when_missing:
-                return cls()
+                return cls(sqlite_path=str(settings_path.parent / cls.sqlite_path))
             else:
                 raise FileNotFoundError(f"Settings file not found: {settings_path}")
 
@@ -66,10 +68,17 @@ class Settings:
         backend = settings.database.lower()
         if backend not in {"sqlite", "mysql"}:
             raise ValueError("database must be either sqlite or mysql")
+        sqlite_path = Path(settings.sqlite_path)
+        if not sqlite_path.is_absolute():
+            sqlite_path = settings_path.parent / sqlite_path
         return cls(
             **{
                 field.name: (
-                    backend if field.name == "database" else getattr(settings, field.name)
+                    backend
+                    if field.name == "database"
+                    else str(sqlite_path)
+                    if field.name == "sqlite_path"
+                    else getattr(settings, field.name)
                 )
                 for field in fields(cls)
             }

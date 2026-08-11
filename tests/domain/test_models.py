@@ -140,6 +140,7 @@ def test_word_properties():
     assert word.language is Language.KOREAN
     assert word.pos is POS.NOUN
     assert word.meanings == []
+    assert word.user_meanings == []
 
     assert word.due is None
     assert word.difficulty == 0.0
@@ -209,6 +210,29 @@ def test_word_meaning_properties_and_updates():
     assert meaning.gloss == "record"
     assert meaning.frequency is MeaningFrequency.COMMON
     assert meaning.labels == {MeaningLabel.TECHNICAL, MeaningLabel.ARCHAIC}
+    assert meaning.display_order == 1
+
+
+def test_user_word_meaning_properties_and_updates():
+    meaning = UserWordMeaning(
+        50,
+        40,
+        korean_definition="사용자 정의",
+        english_definition="user definition",
+        gloss="personal",
+        display_order=2,
+    )
+
+    meaning.korean_definition = "수정"
+    meaning.english_definition = "edited"
+    meaning.gloss = "mine"
+    meaning.display_order = 1
+
+    assert meaning.user_meaning_id == 50
+    assert meaning.word_id == 40
+    assert meaning.korean_definition == "수정"
+    assert meaning.english_definition == "edited"
+    assert meaning.gloss == "mine"
     assert meaning.display_order == 1
 
 

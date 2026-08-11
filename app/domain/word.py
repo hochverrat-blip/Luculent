@@ -38,6 +38,7 @@ class Word:
 
         self._doc_part_words: list[DocPartWord] = []
         self._meanings: list[WordMeaning] = []
+        self._user_meanings: list[UserWordMeaning] = []
 
     def _assign_id(self, word_id: int) -> None:
         self._word_id = word_id
@@ -130,6 +131,10 @@ class Word:
     def meanings(self) -> list[WordMeaning]:
         return self._meanings
 
+    @property
+    def user_meanings(self) -> list[UserWordMeaning]:
+        return self._user_meanings
+
 
 class WordMeaning:
     def __init__(
@@ -192,6 +197,67 @@ class WordMeaning:
     @property
     def labels(self) -> set[MeaningLabel]:
         return self._labels
+
+    @property
+    def display_order(self) -> int:
+        return self._display_order
+
+    @display_order.setter
+    def display_order(self, value: int) -> None:
+        self._display_order = value
+
+
+class UserWordMeaning:
+    def __init__(
+        self,
+        user_meaning_id: int | None,
+        word_id: int,
+        korean_definition: str = "",
+        english_definition: str = "",
+        gloss: str = "",
+        display_order: int = 0,
+    ):
+        self._user_meaning_id = user_meaning_id
+        self._word_id = word_id
+        self._korean_definition = korean_definition
+        self._english_definition = english_definition
+        self._gloss = gloss
+        self._display_order = display_order
+
+    def _assign_id(self, user_meaning_id: int) -> None:
+        self._user_meaning_id = user_meaning_id
+
+    @property
+    def user_meaning_id(self) -> int | None:
+        return self._user_meaning_id
+
+    @property
+    def word_id(self) -> int:
+        return self._word_id
+
+    @property
+    def korean_definition(self) -> str:
+        return self._korean_definition
+
+    @korean_definition.setter
+    def korean_definition(self, value: str) -> None:
+        self._korean_definition = value
+
+    @property
+    def english_definition(self) -> str:
+        return self._english_definition
+
+    @english_definition.setter
+    def english_definition(self, value: str) -> None:
+        self._english_definition = value
+
+    @property
+    def gloss(self) -> str:
+        return self._gloss
+
+    @gloss.setter
+    def gloss(self, value: str) -> None:
+        self._gloss = value
 
     @property
     def display_order(self) -> int:

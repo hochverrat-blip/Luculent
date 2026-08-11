@@ -61,7 +61,7 @@ def test_missing_settings_can_use_sqlite_defaults(tmp_path):
         tmp_path / "missing.txt", use_defaults_when_missing=True
     )
 
-    assert settings == Settings()
+    assert settings == Settings(sqlite_path=str(tmp_path / "luculent.db"))
 
 
 def test_missing_settings_are_created_from_example_file(tmp_path):
@@ -74,7 +74,7 @@ def test_missing_settings_are_created_from_example_file(tmp_path):
 
     assert settings_file.read_text(encoding="utf-8") == example_contents
     assert settings.database == "sqlite"
-    assert settings.sqlite_path == "created.db"
+    assert settings.sqlite_path == str(tmp_path / "created.db")
 
 
 def test_default_settings_path_is_stable_when_working_directory_changes(
@@ -93,7 +93,23 @@ def test_default_settings_path_is_stable_when_working_directory_changes(
     settings = Settings.from_file()
 
     assert settings_file.exists()
-    assert settings.sqlite_path == "stable.db"
+    assert settings.sqlite_path == str(project_directory / "stable.db")
+
+
+def test_relative_sqlite_path_is_based_on_settings_directory(tmp_path, monkeypatch):
+    project_directory = tmp_path / "project"
+    project_directory.mkdir()
+    settings_file = project_directory / "settings.txt"
+    settings_file.write_text(
+        "database=sqlite\nsqlite_path=data/luculent.db\n", encoding="utf-8"
+    )
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    settings = Settings.from_file(settings_file)
+
+    assert settings.sqlite_path == str(project_directory / "data" / "luculent.db")
 
 
 def test_factory_loads_backend_from_settings_file(tmp_path):

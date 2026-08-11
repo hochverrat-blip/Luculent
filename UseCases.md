@@ -38,11 +38,11 @@ The user reviews vocabulary using spaced repetition. The application presents a 
 
 ### Description
 
-The user provides a document or a link to an online document. The application estimates how readable the document is based on the user's current vocabulary knowledge derived from flash card progress.
+The application estimates how readable each imported document part is based on the user's current vocabulary knowledge derived from flash card progress.
 
 ### Input
 
-A document from disk or a URL to an online document.
+An imported document part from the database and word data from the database.
 
 ### Output
 

@@ -31,6 +31,12 @@ _KOREAN_POS = {
     "형용사": POS.ADJECTIVE,
 }
 
+_VOCABULARY_LEVEL_ORDER = {
+    "초급": 0,
+    "중급": 1,
+    "고급": 2,
+}
+
 
 class LexiconManager:
     def ensure_installed(
@@ -66,7 +72,7 @@ def ensure_lexicon(repository: Repository, language: Language) -> None:
 def _iter_korean_meanings(
     archive_path: Path,
 ) -> Iterator[tuple[str, Language, POS, WordMeaning]]:
-    display_orders: defaultdict[tuple[str, POS], int] = defaultdict(int)
+    display_orders: defaultdict[tuple[str, POS, int], int] = defaultdict(int)
     with zipfile.ZipFile(archive_path) as archive:
         for filename in archive.namelist():
             data = json.loads(archive.read(filename))
@@ -78,6 +84,10 @@ def _iter_korean_meanings(
                     continue
                 lemma = lemma.casefold()
                 identity = (lemma, pos)
+                level_order = _VOCABULARY_LEVEL_ORDER.get(
+                    _feature(entry, "vocabularyLevel"), 3
+                )
+                order_identity = (*identity, level_order)
                 for sense in _items(entry.get("Sense")):
                     english = next(
                         (
@@ -105,10 +115,13 @@ def _iter_korean_meanings(
                                 else _feature(english, "lemma") or ""
                             ),
                             frequency=MeaningFrequency.COMMON,
-                            display_order=display_orders[identity],
+                            display_order=(
+                                level_order * 1_000_000
+                                + display_orders[order_identity]
+                            ),
                         ),
                     )
-                    display_orders[identity] += 1
+                    display_orders[order_identity] += 1
 
 
 def _feature(value: dict | list, attribute: str) -> str | None:

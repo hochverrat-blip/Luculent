@@ -8,6 +8,7 @@ import app.services.document_service as document_service_module
 from app.domain import (
     DocPart,
     DocPartWord,
+    Document,
     Language,
     POS,
     Response,
@@ -202,8 +203,82 @@ def test_get_documents_returns_only_the_users_documents(
                 imported.document_id
             ]
             assert document_service.get_documents(other_reader) == []
+            assert (
+                document_service.get_docpart(
+                    reader, imported.doc_parts[0].doc_part_id
+                ).doc_part_id
+                == imported.doc_parts[0].doc_part_id
+            )
+            assert (
+                document_service.get_docpart(
+                    other_reader, imported.doc_parts[0].doc_part_id
+                )
+                is None
+            )
             with pytest.raises(ValueError, match="saved"):
                 document_service.get_documents(User(None, "Unsaved"))
+
+
+def test_document_readability_uses_projected_recall_and_untracked_words(
+    service_context, monkeypatch
+):
+    user_service, document_service = service_context
+    user = user_service.new_user("Reader")
+    document = Document(None, "Reading", "Known learning plus filler.", Language.ENGLISH)
+    part = DocPart(None, document.text, 0)
+    known = Word(None, "known", Language.ENGLISH)
+    known.status = Status.KNOWN
+    learning = Word(None, "learning", Language.ENGLISH)
+    document_service._repository.save_document(user.user_id, document)
+    document_service._repository.save_doc_part(document.document_id, part)
+    document_service._repository.save_word(user.user_id, known)
+    document_service._repository.save_word(user.user_id, learning)
+    document_service._repository.save_doc_part_word(DocPartWord(known, part, 1))
+    document_service._repository.save_doc_part_word(DocPartWord(learning, part, 1))
+    monkeypatch.setattr(
+        WordService,
+        "get_projected_retrievability",
+        staticmethod(lambda word: 1.0 if word.status is Status.KNOWN else 0.5),
+    )
+    loaded = document_service.get_documents(user)
+
+    assert loaded[0].doc_parts[0].readability == pytest.approx(0.875)
+
+
+def test_projected_retrievability_reflects_memory_strength():
+    reviewed_at = datetime.now(timezone.utc)
+    weak = Word(1, "weak")
+    weak.status = Status.LEARNING
+    weak.stability = 0.212
+    weak.last_reviewed = reviewed_at
+    strong = Word(2, "strong")
+    strong.status = Status.REVIEW
+    strong.stability = 8.2956
+    strong.last_reviewed = reviewed_at
+    known = Word(3, "known")
+    known.status = Status.KNOWN
+
+    weak_score = WordService.get_projected_retrievability(weak)
+    strong_score = WordService.get_projected_retrievability(strong)
+
+    assert 0.0 < weak_score < strong_score < 1.0
+    assert WordService.get_projected_retrievability(known) == 1.0
+
+
+def test_delete_document_requires_ownership_and_a_saved_document(service_context):
+    user_service, document_service = service_context
+    reader = user_service.new_user("Reader")
+    other_reader = user_service.new_user("Other Reader")
+    document = Document(None, "Finished", "Text", Language.ENGLISH)
+    document_service._repository.save_document(reader.user_id, document)
+
+    assert document_service.delete_document(other_reader, document) is False
+    assert document_service.delete_document(reader, document) is True
+    assert document_service.get_documents(reader) == []
+    with pytest.raises(ValueError, match="saved"):
+        document_service.delete_document(
+            reader, Document(None, "Unsaved", "Text", Language.ENGLISH)
+        )
 
 
 def test_import_stores_unique_content_lemmas_and_part_occurrences(
@@ -445,7 +520,7 @@ def test_get_due_returns_only_due_words_in_active_parts(
         staticmethod(lambda text: "en"),
     )
     path = tmp_path / "reading.txt"
-    path.write_text("Some document text", encoding="utf-8")
+    path.write_text("The.", encoding="utf-8")
 
     with UserService() as user_service:
         with DocumentService() as document_service:
@@ -506,13 +581,19 @@ def test_get_due_returns_only_due_words_in_active_parts(
                 )
                 word_service.record_response(reviewed_today, Response.GOOD)
 
-                words = word_service.get_due(user)
+                words = []
+                for _ in range(3):
+                    word = word_service.get_due(user)
+                    words.append(word)
+                    word_service.mark_known(word)
+                no_more_due = word_service.get_due(user)
 
-    due_ids = {word.word_id for word in words}
-    assert {new_word.word_id, due.word_id, second_due.word_id} <= due_ids
-    assert future.word_id not in due_ids
-    assert known.word_id not in due_ids
-    assert inactive.word_id not in due_ids
+    assert {word.word_id for word in words} == {
+        new_word.word_id,
+        due.word_id,
+        second_due.word_id,
+    }
+    assert no_more_due is None
     loaded_new = next(word for word in words if word.word_id == new_word.word_id)
     assert loaded_new.meanings[0].gloss == "new meaning"
 
@@ -600,6 +681,33 @@ def test_mark_known_removes_word_from_review(configured_settings):
             assert loaded.status is Status.KNOWN
             assert loaded.due is None
             assert word_service._repository.list_word_reviews(word.word_id) == []
+
+
+def test_add_and_delete_user_meaning(configured_settings):
+    with UserService() as user_service:
+        with WordService() as word_service:
+            user = user_service.new_user("Reader")
+            other = user_service.new_user("Other Reader")
+            word = Word(None, "단어")
+            word_service._repository.save_word(user.user_id, word)
+
+            meaning = word_service.add_user_meaning(
+                user, word.word_id, " 사용자 정의 ", " user definition ", " mine "
+            )
+
+            assert meaning.korean_definition == "사용자 정의"
+            assert meaning.english_definition == "user definition"
+            assert meaning.gloss == "mine"
+            loaded = word_service._repository.get_word(word.word_id)
+            assert loaded.user_meanings[0].user_meaning_id == meaning.user_meaning_id
+            assert word_service.delete_user_meaning(
+                other, meaning.user_meaning_id
+            ) is False
+            assert word_service.delete_user_meaning(
+                user, meaning.user_meaning_id
+            ) is True
+            with pytest.raises(ValueError, match="required"):
+                word_service.add_user_meaning(user, word.word_id, " ", "", "")
 
 
 def test_record_response_requires_a_saved_word(configured_settings):

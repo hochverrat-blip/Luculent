@@ -15,7 +15,13 @@ from app.domain.enums import (
     Status,
 )
 from app.domain.user import User
-from app.domain.word import DocPartWord, Word, WordMeaning, WordReview
+from app.domain.word import (
+    DocPartWord,
+    UserWordMeaning,
+    Word,
+    WordMeaning,
+    WordReview,
+)
 from app.repositories.base import Repository
 
 
@@ -115,6 +121,16 @@ class SQLiteRepository(Repository):
                 FOREIGN KEY (word_id) REFERENCES words(word_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS user_word_meanings (
+                user_meaning_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                word_id INTEGER NOT NULL,
+                korean_definition TEXT NOT NULL,
+                english_definition TEXT NOT NULL,
+                gloss TEXT NOT NULL,
+                display_order INTEGER NOT NULL,
+                FOREIGN KEY (word_id) REFERENCES words(word_id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS word_meaning_labels (
                 meaning_id INTEGER NOT NULL,
                 label TEXT NOT NULL,
@@ -196,6 +212,12 @@ class SQLiteRepository(Repository):
             (name,),
         ).fetchone()
         return None if row is None else self.get_user(row["user_id"])
+
+    def list_users(self) -> list[User]:
+        rows = self._connection.execute(
+            "SELECT user_id FROM users ORDER BY name, user_id"
+        ).fetchall()
+        return [self.get_user(row["user_id"]) for row in rows]
 
     def delete_user(self, user_id: int) -> bool:
         cursor = self._connection.execute(
@@ -329,6 +351,14 @@ class SQLiteRepository(Repository):
         ).fetchall()
         return [self._document_from_row(row) for row in rows]
 
+    def delete_document(self, user_id: int, document_id: int) -> bool:
+        cursor = self._connection.execute(
+            "DELETE FROM documents WHERE document_id = ? AND user_id = ?",
+            (document_id, user_id),
+        )
+        self._connection.commit()
+        return cursor.rowcount > 0
+
     def save_doc_part(self, document_id: int, doc_part: DocPart) -> None:
         self._save_doc_part(document_id, doc_part, commit=True)
 
@@ -391,6 +421,18 @@ class SQLiteRepository(Repository):
             (document_id,),
         ).fetchall()
         return [self._doc_part_from_row(row) for row in rows]
+
+    def get_users_doc_part(self, user_id: int, doc_part_id: int) -> DocPart | None:
+        row = self._connection.execute(
+            """
+            SELECT dp.doc_part_id, dp.text, dp.position, dp.readability, dp.active
+            FROM doc_parts AS dp
+            INNER JOIN documents AS d ON d.document_id = dp.document_id
+            WHERE d.user_id = ? AND dp.doc_part_id = ?
+            """,
+            (user_id, doc_part_id),
+        ).fetchone()
+        return None if row is None else self._doc_part_from_row(row)
 
     def activate_doc_part(self, user_id: int, doc_part_id: int) -> None:
         try:
@@ -503,6 +545,19 @@ class SQLiteRepository(Repository):
             return None
         return self._word_from_row(row)
 
+    def get_user_word(self, user_id: int, word_id: int) -> Word | None:
+        row = self._connection.execute(
+            """
+            SELECT w.*, le.lemma, le.language, le.pos
+            FROM words AS w
+            INNER JOIN lexicon_entries AS le
+                ON le.lexicon_entry_id = w.lexicon_entry_id
+            WHERE w.user_id = ? AND w.word_id = ?
+            """,
+            (user_id, word_id),
+        ).fetchone()
+        return None if row is None else self._word_from_row(row)
+
     def list_words(self, user_id: int) -> list[Word]:
         rows = self._connection.execute(
             """
@@ -540,7 +595,7 @@ class SQLiteRepository(Repository):
                 ).fetchall()
             )
         rows.sort(key=lambda row: row["word_id"])
-        return [self._word_from_row(row) for row in rows]
+        return [self._word_study_from_row(row) for row in rows]
 
     def update_word_study(self, word: Word) -> None:
         if word.word_id is None:
@@ -720,10 +775,84 @@ class SQLiteRepository(Repository):
             meaning.labels.update(MeaningLabel[row["label"]] for row in labels)
         return meanings
 
-    def list_due_words_in_active_parts(
-        self, user_id: int, due_at: datetime
-    ) -> list[Word]:
+    def save_user_word_meaning(
+        self, user_id: int, meaning: UserWordMeaning
+    ) -> None:
+        owned = self._connection.execute(
+            "SELECT 1 FROM words WHERE word_id = ? AND user_id = ?",
+            (meaning.word_id, user_id),
+        ).fetchone()
+        if owned is None:
+            raise ValueError("Word must belong to the user")
+        if meaning.user_meaning_id is None:
+            meaning._assign_id(
+                self._execute_insert(
+                    """
+                    INSERT INTO user_word_meanings (
+                        word_id, korean_definition, english_definition, gloss,
+                        display_order
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        meaning.word_id,
+                        meaning.korean_definition,
+                        meaning.english_definition,
+                        meaning.gloss,
+                        meaning.display_order,
+                    ),
+                )
+            )
+            return
+        cursor = self._connection.execute(
+            """
+            UPDATE user_word_meanings
+            SET korean_definition = ?, english_definition = ?, gloss = ?,
+                display_order = ?
+            WHERE user_meaning_id = ? AND word_id = ?
+            """,
+            (
+                meaning.korean_definition,
+                meaning.english_definition,
+                meaning.gloss,
+                meaning.display_order,
+                meaning.user_meaning_id,
+                meaning.word_id,
+            ),
+        )
+        if cursor.rowcount == 0:
+            self._connection.rollback()
+            raise ValueError("User meaning must belong to the word")
+        self._connection.commit()
+
+    def list_user_word_meanings(self, word_id: int) -> list[UserWordMeaning]:
         rows = self._connection.execute(
+            """
+            SELECT *
+            FROM user_word_meanings
+            WHERE word_id = ?
+            ORDER BY display_order, user_meaning_id
+            """,
+            (word_id,),
+        ).fetchall()
+        return [self._user_word_meaning_from_row(row) for row in rows]
+
+    def delete_user_word_meaning(self, user_id: int, user_meaning_id: int) -> bool:
+        cursor = self._connection.execute(
+            """
+            DELETE FROM user_word_meanings
+            WHERE user_meaning_id = ?
+              AND word_id IN (SELECT word_id FROM words WHERE user_id = ?)
+            """,
+            (user_meaning_id, user_id),
+        )
+        self._connection.commit()
+        return cursor.rowcount > 0
+
+    def get_due_word_in_active_parts(
+        self, user_id: int, due_at: datetime, exclude_word_id: int | None = None
+    ) -> Word | None:
+        row = self._connection.execute(
             """
             SELECT DISTINCT w.*, le.lemma, le.language, le.pos
             FROM words AS w
@@ -737,7 +866,39 @@ class SQLiteRepository(Repository):
               AND w.status IN (?, ?, ?, ?)
               AND (w.due IS NULL OR w.due <= ?)
               AND dp.active = 1
-            ORDER BY w.due IS NOT NULL, w.due, w.word_id
+              AND (? IS NULL OR w.word_id <> ?)
+            ORDER BY RANDOM()
+            LIMIT 1
+            """,
+            (
+                user_id,
+                user_id,
+                Status.NEW.name,
+                Status.LEARNING.name,
+                Status.REVIEW.name,
+                Status.RELEARNING.name,
+                self._datetime_to_text(due_at),
+                exclude_word_id,
+                exclude_word_id,
+            ),
+        ).fetchone()
+        return None if row is None else self._word_from_row(row)
+
+    def count_due_words_in_active_parts(
+        self, user_id: int, due_at: datetime
+    ) -> int:
+        row = self._connection.execute(
+            """
+            SELECT COUNT(DISTINCT w.word_id) AS word_count
+            FROM words AS w
+            INNER JOIN doc_part_words AS dpw ON dpw.word_id = w.word_id
+            INNER JOIN doc_parts AS dp ON dp.doc_part_id = dpw.doc_part_id
+            INNER JOIN documents AS d ON d.document_id = dp.document_id
+            WHERE w.user_id = ?
+              AND d.user_id = ?
+              AND w.status IN (?, ?, ?, ?)
+              AND (w.due IS NULL OR w.due <= ?)
+              AND dp.active = 1
             """,
             (
                 user_id,
@@ -748,8 +909,8 @@ class SQLiteRepository(Repository):
                 Status.RELEARNING.name,
                 self._datetime_to_text(due_at),
             ),
-        ).fetchall()
-        return [self._word_from_row(row) for row in rows]
+        ).fetchone()
+        return row["word_count"]
 
     def save_doc_part_word(self, association: DocPartWord) -> None:
         self._save_doc_part_word(association, commit=True)
@@ -807,6 +968,32 @@ class SQLiteRepository(Repository):
         return [
             DocPartWord(
                 word=self._word_from_row(row),
+                doc_part=self._doc_part_from_row(row),
+                occurrences=row["occurrences"],
+            )
+            for row in rows
+        ]
+
+    def list_users_doc_part_words(self, user_id: int) -> list[DocPartWord]:
+        rows = self._connection.execute(
+            """
+            SELECT dpw.occurrences, dp.doc_part_id, dp.text, dp.position,
+                   dp.readability, dp.active, w.*,
+                   le.lemma, le.language, le.pos
+            FROM documents AS d
+            INNER JOIN doc_parts AS dp ON dp.document_id = d.document_id
+            INNER JOIN doc_part_words AS dpw ON dpw.doc_part_id = dp.doc_part_id
+            INNER JOIN words AS w ON w.word_id = dpw.word_id
+            INNER JOIN lexicon_entries AS le
+                ON le.lexicon_entry_id = w.lexicon_entry_id
+            WHERE d.user_id = ?
+            ORDER BY dp.doc_part_id, w.word_id
+            """,
+            (user_id,),
+        ).fetchall()
+        return [
+            DocPartWord(
+                word=self._word_study_from_row(row),
                 doc_part=self._doc_part_from_row(row),
                 occurrences=row["occurrences"],
             )
@@ -944,6 +1131,13 @@ class SQLiteRepository(Repository):
         )
 
     def _word_from_row(self, row: sqlite3.Row) -> Word:
+        word = self._word_study_from_row(row)
+        word.meanings.extend(self.list_word_meanings(word.word_id))
+        word.user_meanings.extend(self.list_user_word_meanings(word.word_id))
+        return word
+
+    @staticmethod
+    def _word_study_from_row(row: sqlite3.Row) -> Word:
         word = Word(
             word_id=row["word_id"],
             lemma=row["lemma"],
@@ -959,7 +1153,6 @@ class SQLiteRepository(Repository):
             row["last_reviewed"]
         )
         word.step = row["step"]
-        word.meanings.extend(self.list_word_meanings(word.word_id))
         return word
 
     @staticmethod
@@ -970,6 +1163,17 @@ class SQLiteRepository(Repository):
             english_definition=row["english_definition"],
             gloss=row["gloss"],
             frequency=MeaningFrequency[row["frequency"]],
+            display_order=row["display_order"],
+        )
+
+    @staticmethod
+    def _user_word_meaning_from_row(row: sqlite3.Row) -> UserWordMeaning:
+        return UserWordMeaning(
+            user_meaning_id=row["user_meaning_id"],
+            word_id=row["word_id"],
+            korean_definition=row["korean_definition"],
+            english_definition=row["english_definition"],
+            gloss=row["gloss"],
             display_order=row["display_order"],
         )
 

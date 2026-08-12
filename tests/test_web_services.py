@@ -3,6 +3,7 @@ from io import BytesIO
 
 import app.settings as settings_module
 import app.services.document_service as document_service_module
+import app.web.server as web_server_module
 from app.domain import (
     DocPart,
     DocPartWord,
@@ -129,6 +130,49 @@ def test_user_interface_is_available(tmp_path, monkeypatch):
     assert b"Preparing this reading" in response.data
     assert b'id="previous-part"' in response.data
     assert b'id="next-part"' in response.data
+
+
+def test_run_server_uses_available_port_and_opens_that_address(
+    monkeypatch, capsys
+):
+    events = {}
+
+    class FakeServer:
+        server_port = 54321
+
+        @staticmethod
+        def serve_forever():
+            raise KeyboardInterrupt
+
+        @staticmethod
+        def server_close():
+            events["closed"] = True
+
+    class FakeTimer:
+        def __init__(self, interval, function, args):
+            events["timer"] = (interval, function, args)
+
+        @staticmethod
+        def start():
+            events["started"] = True
+
+    monkeypatch.setattr(
+        web_server_module,
+        "make_server",
+        lambda host, port, application: (
+            events.update(host=host, port=port) or FakeServer()
+        ),
+    )
+    monkeypatch.setattr(web_server_module, "Timer", FakeTimer)
+
+    web_server_module.run_server(open_browser=True)
+
+    assert events["host"] == "127.0.0.1"
+    assert events["port"] == 0
+    assert events["timer"][2] == ("http://127.0.0.1:54321",)
+    assert events["started"] is True
+    assert events["closed"] is True
+    assert "http://127.0.0.1:54321" in capsys.readouterr().out
 
 
 def test_lexicon_status_reports_installation(tmp_path, monkeypatch):

@@ -1,6 +1,32 @@
 services:
+  luculent:
+    build: .
+    environment:
+      LUCULENT_DATABASE: sqlite
+    ports:
+      - "127.0.0.1:5000:5000"
+    volumes:
+      - luculent_sqlite_data:/data
+
+  luculent-mysql:
+    build: .
+    profiles: ["mysql"]
+    environment:
+      LUCULENT_DATABASE: mysql
+      LUCULENT_MYSQL_HOST: mysql
+      LUCULENT_MYSQL_PORT: 3306
+      LUCULENT_MYSQL_DATABASE: luculent
+      LUCULENT_MYSQL_USER: luculent
+      LUCULENT_MYSQL_PASSWORD: luculent
+    ports:
+      - "127.0.0.1:5000:5000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
   mysql:
     image: mysql:8.4
+    profiles: ["mysql"]
     environment:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_ROOT_HOST: "%"
@@ -8,7 +34,7 @@ services:
       MYSQL_USER: luculent
       MYSQL_PASSWORD: luculent
     ports:
-      - "32000:3306"
+      - "127.0.0.1:32000:3306"
     volumes:
       - luculent_mysql_data:/var/lib/mysql
     healthcheck:
@@ -18,4 +44,5 @@ services:
       retries: 20
 
 volumes:
+  luculent_sqlite_data:
   luculent_mysql_data:

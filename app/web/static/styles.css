@@ -21,6 +21,7 @@ h2 { font-family: Georgia, serif; font-size: clamp(2rem, 4vw, 3rem); }
 
 .page-width { width: min(70rem, calc(100% - 2rem)); margin: 0 auto; padding: 3rem 0; }
 .centered-panel { width: min(48rem, calc(100% - 2rem)); margin: 10vh auto; text-align: center; }
+.product-name { margin-bottom: 1rem; color: var(--green); font: 700 clamp(1.8rem, 4vw, 2.6rem) Georgia, serif; letter-spacing: .04em; }
 .eyebrow { color: var(--green); font-size: .78rem; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
 .muted, .status { color: var(--muted); }
 .status { min-height: 1.5rem; margin-top: 1rem; }
@@ -28,8 +29,11 @@ h2 { font-family: Georgia, serif; font-size: clamp(2rem, 4vw, 3rem); }
 
 button { border: 1px solid var(--line); border-radius: .65rem; background: var(--card); padding: .7rem 1rem; color: var(--ink); }
 button:hover { border-color: var(--green); }
+button:disabled { cursor: default; opacity: .55; }
+button:disabled:hover { border-color: var(--line); }
 .primary { color: white; background: var(--green); border-color: var(--green); }
 .primary:hover { background: var(--green-dark); }
+.primary:disabled:hover { background: var(--green); border-color: var(--green); }
 .text-button { padding: .35rem; border: 0; background: transparent; color: var(--green); }
 input, textarea { width: 100%; border: 1px solid var(--line); border-radius: .55rem; background: white; padding: .75rem; }
 textarea { min-height: 5rem; resize: vertical; }

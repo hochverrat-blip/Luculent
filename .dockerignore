@@ -1,0 +1,13 @@
+.git
+.github
+.idea
+.pytest_cache
+.venv
+__pycache__
+documents
+tests
+workdocs
+*.db
+*.db-shm
+*.db-wal
+settings.txt

@@ -409,8 +409,7 @@ async function recordResponse(response) {
 
 async function importUrl(event) {
     event.preventDefault();
-    const button = event.target.querySelector("button[type=submit]");
-    button.disabled = true;
+    setImportButtonsDisabled(true);
     try {
         await showImportMessage();
         await api("/documents", jsonOptions("POST", {
@@ -423,7 +422,7 @@ async function importUrl(event) {
     } catch (error) {
         byId("import-status").textContent = error.message;
     } finally {
-        button.disabled = false;
+        setImportButtonsDisabled(false);
     }
 }
 
@@ -432,8 +431,7 @@ async function importFile(event) {
     const data = new FormData();
     data.append("username", state.username);
     data.append("file", byId("document-file").files[0]);
-    const button = event.target.querySelector("button[type=submit]");
-    button.disabled = true;
+    setImportButtonsDisabled(true);
     try {
         await showImportMessage();
         await api("/documents", {method: "POST", body: data});
@@ -443,7 +441,13 @@ async function importFile(event) {
     } catch (error) {
         byId("import-status").textContent = error.message;
     } finally {
-        button.disabled = false;
+        setImportButtonsDisabled(false);
+    }
+}
+
+function setImportButtonsDisabled(disabled) {
+    for (const button of document.querySelectorAll(".import-panel button[type=submit]")) {
+        button.disabled = disabled;
     }
 }
 

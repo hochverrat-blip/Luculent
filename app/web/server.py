@@ -1,8 +1,11 @@
+import webbrowser
 from http import HTTPStatus
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Timer
 
 from flask import Flask, jsonify, render_template, request
+from werkzeug.serving import make_server
 
 from app.domain import (
     DocPart,
@@ -369,9 +372,21 @@ def _user_meaning_json(meaning: UserWordMeaning) -> dict:
     }
 
 
-def run_server() -> None:
-    create_app().run(host="127.0.0.1", port=5000)
-
-
-if __name__ == "__main__":
-    run_server()
+def run_server(
+    *,
+    open_browser: bool = False,
+    host: str = "127.0.0.1",
+    port: int = 0,
+) -> None:
+    server = make_server(host, port, create_app())
+    browser_host = "127.0.0.1" if host == "0.0.0.0" else host
+    url = f"http://{browser_host}:{server.server_port}"
+    print(f"Luculent is running at {url}")
+    if open_browser:
+        Timer(1, webbrowser.open, args=(url,)).start()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()

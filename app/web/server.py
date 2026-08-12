@@ -89,6 +89,19 @@ def create_app() -> Flask:
             count = word_service.count_due(user)
         return jsonify({"due_count": count})
 
+    @appl.route("/study-due-count", methods=["GET"])
+    def get_study_due_count():
+        username = request.args.get("username", "").strip()
+        if not username:
+            return jsonify({"error": "username is required"}), HTTPStatus.BAD_REQUEST
+        with UserService() as user_service:
+            user = user_service.get_user(username)
+        if user is None:
+            return jsonify({"error": "user not found"}), HTTPStatus.NOT_FOUND
+        with WordService() as word_service:
+            count = word_service.count_study_due(user)
+        return jsonify({"due_count": count})
+
     @appl.route("/documents", methods=["GET"])
     def get_documents():
         username = request.args.get("username", "").strip()
@@ -212,7 +225,7 @@ def create_app() -> Flask:
             part = document_service.get_docpart(user, doc_part_id)
             if part is None:
                 return jsonify({"error": "document part not found"}), HTTPStatus.NOT_FOUND
-            marked_text = document_service.get_md_text(user, part.text)
+            marked_text = document_service.get_md_text(user, part)
         result = _doc_part_json(part)
         result["marked_text"] = marked_text
         return jsonify({"doc_part": result})
@@ -238,18 +251,20 @@ def create_app() -> Flask:
                 return jsonify({"error": "word not found"}), HTTPStatus.NOT_FOUND
             try:
                 if response_name.casefold() == "known":
-                    word_service.mark_known(word)
+                    word_service.mark_known(user, word)
                 else:
                     response = next(
                         response
                         for response in Response
                         if response.value.casefold() == response_name.casefold()
                     )
-                    word_service.record_response(word, response, data.get("duration_ms"))
+                    word_service.record_response(
+                        user, word, response, data.get("duration_ms")
+                    )
             except (StopIteration, TypeError, ValueError) as error:
                 message = "invalid response" if isinstance(error, StopIteration) else str(error)
                 return jsonify({"error": message}), HTTPStatus.BAD_REQUEST
-            due_count = word_service.count_due(user)
+            due_count = word_service.count_study_due(user)
         return jsonify({"word": _word_json(word), "due_count": due_count})
 
     @appl.route("/words/<int:word_id>/user-meanings", methods=["POST"])
@@ -335,8 +350,6 @@ def _word_json(word: Word) -> dict:
                 "korean_definition": meaning.korean_definition,
                 "english_definition": meaning.english_definition,
                 "gloss": meaning.gloss,
-                "frequency": meaning.frequency.value,
-                "labels": sorted(label.value for label in meaning.labels),
             }
             for meaning in word.meanings
         ],

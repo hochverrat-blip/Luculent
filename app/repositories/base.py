@@ -85,6 +85,12 @@ class Repository(ABC):
         """Return a document part only when its document belongs to the user"""
 
     @abstractmethod
+    def get_users_doc_part_language(
+        self, user_id: int, doc_part_id: int
+    ) -> Language | None:
+        """Return the language for a document part belonging to the user"""
+
+    @abstractmethod
     def activate_doc_part(self, user_id: int, doc_part_id: int) -> None:
         """Make one of a user's document parts their only active part"""
 
@@ -124,7 +130,7 @@ class Repository(ABC):
 
     @abstractmethod
     def save_word_meaning(self, word_id: int, meaning: WordMeaning) -> None:
-        """Insert or update a meaning and its labels"""
+        """Insert or update a meaning"""
 
     @abstractmethod
     def list_word_meanings(self, word_id: int) -> list[WordMeaning]:

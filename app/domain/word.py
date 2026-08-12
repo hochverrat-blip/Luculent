@@ -6,8 +6,6 @@ from typing import Optional
 
 from app.domain.enums import (
     Language,
-    MeaningFrequency,
-    MeaningLabel,
     POS,
     Response,
     Status,
@@ -143,16 +141,12 @@ class WordMeaning:
         korean_definition: str = "",
         english_definition: str = "",
         gloss: str = "",
-        frequency: MeaningFrequency = MeaningFrequency.COMMON,
-        labels: set[MeaningLabel] | None = None,
         display_order: int = 0,
     ):
         self._meaning_id = meaning_id
         self._korean_definition = korean_definition
         self._english_definition = english_definition
         self._gloss = gloss
-        self._frequency = frequency
-        self._labels = set() if labels is None else set(labels)
         self._display_order = display_order
 
     def _assign_id(self, meaning_id: int) -> None:
@@ -185,18 +179,6 @@ class WordMeaning:
     @gloss.setter
     def gloss(self, value: str) -> None:
         self._gloss = value
-
-    @property
-    def frequency(self) -> MeaningFrequency:
-        return self._frequency
-
-    @frequency.setter
-    def frequency(self, value: MeaningFrequency) -> None:
-        self._frequency = value
-
-    @property
-    def labels(self) -> set[MeaningLabel]:
-        return self._labels
 
     @property
     def display_order(self) -> int:

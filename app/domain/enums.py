@@ -27,13 +27,3 @@ class POS(Enum):
     NOUN = "Noun"
     ADVERB = "Adverb"
     ADJECTIVE = "Adjective"
-
-
-class MeaningFrequency(Enum):
-    COMMON = "Common"
-    RARE = "Rare"
-
-
-class MeaningLabel(Enum):
-    ARCHAIC = "Archaic"
-    TECHNICAL = "Technical"

@@ -7,8 +7,6 @@ from typing import Any, Callable
 from app.domain.document import DocPart, Document
 from app.domain.enums import (
     Language,
-    MeaningFrequency,
-    MeaningLabel,
     POS,
     Response,
     Status,
@@ -60,7 +58,9 @@ class MySQLRepository(Repository):
             """
             CREATE TABLE IF NOT EXISTS users (
                 user_id INT AUTO_INCREMENT PRIMARY KEY,
-                name VARCHAR(255) NOT NULL UNIQUE,
+                name VARCHAR(255) NOT NULL,
+                name_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
+                    NOT NULL UNIQUE,
                 created DATE NOT NULL,
                 native_language VARCHAR(50) NOT NULL DEFAULT 'ENGLISH'
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -138,7 +138,6 @@ class MySQLRepository(Repository):
                 korean_definition TEXT NOT NULL,
                 english_definition TEXT NOT NULL,
                 gloss VARCHAR(500) NOT NULL,
-                frequency VARCHAR(50) NOT NULL,
                 display_order INT NOT NULL,
                 CONSTRAINT fk_word_meanings_entry
                     FOREIGN KEY (lexicon_entry_id)
@@ -173,16 +172,6 @@ class MySQLRepository(Repository):
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             """
-            CREATE TABLE IF NOT EXISTS word_meaning_labels (
-                meaning_id INT NOT NULL,
-                label VARCHAR(50) NOT NULL,
-                PRIMARY KEY (meaning_id, label),
-                CONSTRAINT fk_word_meaning_labels_meaning
-                    FOREIGN KEY (meaning_id) REFERENCES word_meanings(meaning_id)
-                    ON DELETE CASCADE
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            """,
-            """
             CREATE TABLE IF NOT EXISTS doc_part_words (
                 word_id INT NOT NULL,
                 doc_part_id INT NOT NULL,
@@ -212,25 +201,32 @@ class MySQLRepository(Repository):
             user._assign_id(
                 self._execute_insert(
                     """
-                    INSERT INTO users (name, created, native_language)
-                    VALUES (%s, %s, %s)
+                    INSERT INTO users (name, name_key, created, native_language)
+                    VALUES (%s, %s, %s, %s)
                     """,
-                    (user.name, user.created, user.native_language.name),
+                    (
+                        user.name,
+                        user.name.casefold(),
+                        user.created,
+                        user.native_language.name,
+                    ),
                 )
             )
             return
         self._execute_write(
             """
-            INSERT INTO users (user_id, name, created, native_language)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO users (user_id, name, name_key, created, native_language)
+            VALUES (%s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 name = VALUES(name),
+                name_key = VALUES(name_key),
                 created = VALUES(created),
                 native_language = VALUES(native_language)
             """,
             (
                 user.user_id,
                 user.name,
+                user.name.casefold(),
                 user.created,
                 user.native_language.name,
             ),
@@ -256,8 +252,8 @@ class MySQLRepository(Repository):
 
     def get_user_by_name(self, name: str) -> User | None:
         row = self._fetch_one(
-            "SELECT user_id FROM users WHERE name = %s",
-            (name,),
+            "SELECT user_id FROM users WHERE name_key = %s",
+            (name.casefold(),),
         )
         return None if row is None else self.get_user(row["user_id"])
 
@@ -473,6 +469,20 @@ class MySQLRepository(Repository):
             (user_id, doc_part_id),
         )
         return None if row is None else self._doc_part_from_row(row)
+
+    def get_users_doc_part_language(
+        self, user_id: int, doc_part_id: int
+    ) -> Language | None:
+        row = self._fetch_one(
+            """
+            SELECT d.language
+            FROM doc_parts AS dp
+            INNER JOIN documents AS d ON d.document_id = dp.document_id
+            WHERE d.user_id = %s AND dp.doc_part_id = %s
+            """,
+            (user_id, doc_part_id),
+        )
+        return None if row is None else Language[row["language"]]
 
     def activate_doc_part(self, user_id: int, doc_part_id: int) -> None:
         cursor = self._connection.cursor()
@@ -745,16 +755,15 @@ class MySQLRepository(Repository):
                     """
                     INSERT INTO word_meanings (
                         lexicon_entry_id, source, korean_definition,
-                        english_definition, gloss, frequency, display_order
+                        english_definition, gloss, display_order
                     )
-                    VALUES (%s, 'USER', %s, %s, %s, %s, %s)
+                    VALUES (%s, 'USER', %s, %s, %s, %s)
                     """,
                     (
                         lexicon_entry_id,
                         meaning.korean_definition,
                         meaning.english_definition,
                         meaning.gloss,
-                        meaning.frequency.name,
                         meaning.display_order,
                     ),
                     commit=False,
@@ -765,15 +774,14 @@ class MySQLRepository(Repository):
                 """
                 INSERT INTO word_meanings (
                     meaning_id, lexicon_entry_id, source, korean_definition,
-                    english_definition, gloss, frequency, display_order
+                    english_definition, gloss, display_order
                 )
-                VALUES (%s, %s, 'USER', %s, %s, %s, %s, %s)
+                VALUES (%s, %s, 'USER', %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     lexicon_entry_id = VALUES(lexicon_entry_id),
                     korean_definition = VALUES(korean_definition),
                     english_definition = VALUES(english_definition),
                     gloss = VALUES(gloss),
-                    frequency = VALUES(frequency),
                     display_order = VALUES(display_order)
                 """,
                 (
@@ -782,23 +790,8 @@ class MySQLRepository(Repository):
                     meaning.korean_definition,
                     meaning.english_definition,
                     meaning.gloss,
-                    meaning.frequency.name,
                     meaning.display_order,
                 ),
-                commit=False,
-            )
-        self._execute_write(
-            "DELETE FROM word_meaning_labels WHERE meaning_id = %s",
-            (meaning.meaning_id,),
-            commit=False,
-        )
-        for label in meaning.labels:
-            self._execute_write(
-                """
-                INSERT INTO word_meaning_labels (meaning_id, label)
-                VALUES (%s, %s)
-                """,
-                (meaning.meaning_id, label.name),
                 commit=False,
             )
         if commit:
@@ -816,19 +809,7 @@ class MySQLRepository(Repository):
             """,
             (word_id,),
         )
-        meanings = [self._word_meaning_from_row(row) for row in rows]
-        for meaning in meanings:
-            labels = self._fetch_all(
-                """
-                SELECT label
-                FROM word_meaning_labels
-                WHERE meaning_id = %s
-                ORDER BY label
-                """,
-                (meaning.meaning_id,),
-            )
-            meaning.labels.update(MeaningLabel[row["label"]] for row in labels)
-        return meanings
+        return [self._word_meaning_from_row(row) for row in rows]
 
     def save_user_word_meaning(
         self, user_id: int, meaning: UserWordMeaning
@@ -1097,9 +1078,9 @@ class MySQLRepository(Repository):
                         """
                         INSERT INTO word_meanings (
                             lexicon_entry_id, source, korean_definition,
-                            english_definition, gloss, frequency, display_order
+                            english_definition, gloss, display_order
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         """,
                         (
                             entry_id,
@@ -1107,21 +1088,11 @@ class MySQLRepository(Repository):
                             meaning.korean_definition,
                             meaning.english_definition,
                             meaning.gloss,
-                            meaning.frequency.name,
                             meaning.display_order,
                         ),
                         commit=False,
                     )
                 )
-                for label in meaning.labels:
-                    self._execute_write(
-                        """
-                        INSERT INTO word_meaning_labels (meaning_id, label)
-                        VALUES (%s, %s)
-                        """,
-                        (meaning.meaning_id, label.name),
-                        commit=False,
-                    )
             self._execute_write(
                 """
                 INSERT INTO lexicon_metadata (source, version, checksum)
@@ -1289,7 +1260,6 @@ class MySQLRepository(Repository):
             korean_definition=row["korean_definition"],
             english_definition=row["english_definition"],
             gloss=row["gloss"],
-            frequency=MeaningFrequency[row["frequency"]],
             display_order=row["display_order"],
         )
 

@@ -10,7 +10,7 @@ from shutil import copyfileobj
 from tempfile import TemporaryDirectory
 from urllib.request import Request, urlopen
 
-from app.domain import Language, MeaningFrequency, POS, WordMeaning
+from app.domain import Language, POS, WordMeaning
 from app.repositories.base import Repository
 
 
@@ -114,7 +114,6 @@ def _iter_korean_meanings(
                                 if english is None
                                 else _feature(english, "lemma") or ""
                             ),
-                            frequency=MeaningFrequency.COMMON,
                             display_order=(
                                 level_order * 1_000_000
                                 + display_orders[order_identity]

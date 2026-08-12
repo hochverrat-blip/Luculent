@@ -1,8 +1,6 @@
 from app.domain.document import DocPart, Document
 from app.domain.enums import (
     Language,
-    MeaningFrequency,
-    MeaningLabel,
     POS,
     Response,
     Status,
@@ -21,8 +19,6 @@ __all__ = [
     "DocPartWord",
     "Document",
     "Language",
-    "MeaningFrequency",
-    "MeaningLabel",
     "POS",
     "Response",
     "Status",

@@ -131,15 +131,18 @@ class DocumentService(Service):
         self._repository.activate_doc_part(user.user_id, docpart.doc_part_id)
         docpart.active = True
 
-    def get_md_text(self, user: User, text: str) -> str:
+    def get_md_text(self, user: User, docpart: DocPart) -> str:
         self._require_saved_user(user)
-        if not text:
-            return text
-        language_code = self._detect_language_code(text).lower()
-        if language_code not in SUPPORTED_DOCUMENT_LANGUAGES:
-            raise ValueError(f"Unsupported document language: {language_code}")
-        language = SUPPORTED_DOCUMENT_LANGUAGES[language_code]
-        spans = list(self._content_word_spans(text, language))
+        if docpart.doc_part_id is None:
+            raise ValueError("Document part must be saved before marking its text")
+        language = self._repository.get_users_doc_part_language(
+            user.user_id, docpart.doc_part_id
+        )
+        if language is None:
+            raise ValueError("Document part must belong to the user")
+        if not docpart.text:
+            return docpart.text
+        spans = list(self._content_word_spans(docpart.text, language))
         words = {
             (word.lemma, word.pos): word
             for word in self._repository.list_words_by_lemmas(
@@ -154,7 +157,7 @@ class DocumentService(Service):
             if (word := words.get((lemma, pos))) is not None
             and word.status not in {Status.KNOWN, Status.SUSPENDED}
         }
-        marked = text
+        marked = docpart.text
         for start, end in sorted(difficult, reverse=True):
             marked = f"{marked[:start]}**{marked[start:end]}**{marked[end:]}"
         return marked

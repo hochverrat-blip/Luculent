@@ -8,8 +8,6 @@ from pathlib import Path
 from app.domain.document import DocPart, Document
 from app.domain.enums import (
     Language,
-    MeaningFrequency,
-    MeaningLabel,
     POS,
     Response,
     Status,
@@ -40,7 +38,8 @@ class SQLiteRepository(Repository):
             """
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                name_key TEXT NOT NULL UNIQUE,
                 created TEXT NOT NULL,
                 native_language TEXT NOT NULL DEFAULT 'ENGLISH'
             );
@@ -105,7 +104,6 @@ class SQLiteRepository(Repository):
                 korean_definition TEXT NOT NULL,
                 english_definition TEXT NOT NULL,
                 gloss TEXT NOT NULL,
-                frequency TEXT NOT NULL,
                 display_order INTEGER NOT NULL,
                 FOREIGN KEY (lexicon_entry_id)
                     REFERENCES lexicon_entries(lexicon_entry_id) ON DELETE CASCADE
@@ -131,14 +129,6 @@ class SQLiteRepository(Repository):
                 FOREIGN KEY (word_id) REFERENCES words(word_id) ON DELETE CASCADE
             );
 
-            CREATE TABLE IF NOT EXISTS word_meaning_labels (
-                meaning_id INTEGER NOT NULL,
-                label TEXT NOT NULL,
-                PRIMARY KEY (meaning_id, label),
-                FOREIGN KEY (meaning_id)
-                    REFERENCES word_meanings(meaning_id) ON DELETE CASCADE
-            );
-
             CREATE TABLE IF NOT EXISTS doc_part_words (
                 word_id INTEGER NOT NULL,
                 doc_part_id INTEGER NOT NULL,
@@ -158,11 +148,12 @@ class SQLiteRepository(Repository):
             user._assign_id(
                 self._execute_insert(
                     """
-                    INSERT INTO users (name, created, native_language)
-                    VALUES (?, ?, ?)
+                    INSERT INTO users (name, name_key, created, native_language)
+                    VALUES (?, ?, ?, ?)
                     """,
                     (
                         user.name,
+                        user.name.casefold(),
                         user.created.isoformat(),
                         user.native_language.name,
                     ),
@@ -171,16 +162,18 @@ class SQLiteRepository(Repository):
             return
         self._connection.execute(
             """
-            INSERT INTO users (user_id, name, created, native_language)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO users (user_id, name, name_key, created, native_language)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 name = excluded.name,
+                name_key = excluded.name_key,
                 created = excluded.created,
                 native_language = excluded.native_language
             """,
             (
                 user.user_id,
                 user.name,
+                user.name.casefold(),
                 user.created.isoformat(),
                 user.native_language.name,
             ),
@@ -208,8 +201,8 @@ class SQLiteRepository(Repository):
 
     def get_user_by_name(self, name: str) -> User | None:
         row = self._connection.execute(
-            "SELECT user_id FROM users WHERE name = ?",
-            (name,),
+            "SELECT user_id FROM users WHERE name_key = ?",
+            (name.casefold(),),
         ).fetchone()
         return None if row is None else self.get_user(row["user_id"])
 
@@ -433,6 +426,20 @@ class SQLiteRepository(Repository):
             (user_id, doc_part_id),
         ).fetchone()
         return None if row is None else self._doc_part_from_row(row)
+
+    def get_users_doc_part_language(
+        self, user_id: int, doc_part_id: int
+    ) -> Language | None:
+        row = self._connection.execute(
+            """
+            SELECT d.language
+            FROM doc_parts AS dp
+            INNER JOIN documents AS d ON d.document_id = dp.document_id
+            WHERE d.user_id = ? AND dp.doc_part_id = ?
+            """,
+            (user_id, doc_part_id),
+        ).fetchone()
+        return None if row is None else Language[row["language"]]
 
     def activate_doc_part(self, user_id: int, doc_part_id: int) -> None:
         try:
@@ -697,16 +704,15 @@ class SQLiteRepository(Repository):
                     """
                     INSERT INTO word_meanings (
                         lexicon_entry_id, source, korean_definition,
-                        english_definition, gloss, frequency, display_order
+                        english_definition, gloss, display_order
                     )
-                    VALUES (?, 'USER', ?, ?, ?, ?, ?)
+                    VALUES (?, 'USER', ?, ?, ?, ?)
                     """,
                     (
                         lexicon_entry_id,
                         meaning.korean_definition,
                         meaning.english_definition,
                         meaning.gloss,
-                        meaning.frequency.name,
                         meaning.display_order,
                     ),
                     commit=False,
@@ -717,15 +723,14 @@ class SQLiteRepository(Repository):
                 """
                 INSERT INTO word_meanings (
                     meaning_id, lexicon_entry_id, source, korean_definition,
-                    english_definition, gloss, frequency, display_order
+                    english_definition, gloss, display_order
                 )
-                VALUES (?, ?, 'USER', ?, ?, ?, ?, ?)
+                VALUES (?, ?, 'USER', ?, ?, ?, ?)
                 ON CONFLICT(meaning_id) DO UPDATE SET
                     lexicon_entry_id = excluded.lexicon_entry_id,
                     korean_definition = excluded.korean_definition,
                     english_definition = excluded.english_definition,
                     gloss = excluded.gloss,
-                    frequency = excluded.frequency,
                     display_order = excluded.display_order
                 """,
                 (
@@ -734,18 +739,9 @@ class SQLiteRepository(Repository):
                     meaning.korean_definition,
                     meaning.english_definition,
                     meaning.gloss,
-                    meaning.frequency.name,
                     meaning.display_order,
                 ),
             )
-        self._connection.execute(
-            "DELETE FROM word_meaning_labels WHERE meaning_id = ?",
-            (meaning.meaning_id,),
-        )
-        self._connection.executemany(
-            "INSERT INTO word_meaning_labels (meaning_id, label) VALUES (?, ?)",
-            ((meaning.meaning_id, label.name) for label in meaning.labels),
-        )
         if commit:
             self._connection.commit()
 
@@ -761,19 +757,7 @@ class SQLiteRepository(Repository):
             """,
             (word_id,),
         ).fetchall()
-        meanings = [self._word_meaning_from_row(row) for row in rows]
-        for meaning in meanings:
-            labels = self._connection.execute(
-                """
-                SELECT label
-                FROM word_meaning_labels
-                WHERE meaning_id = ?
-                ORDER BY label
-                """,
-                (meaning.meaning_id,),
-            ).fetchall()
-            meaning.labels.update(MeaningLabel[row["label"]] for row in labels)
-        return meanings
+        return [self._word_meaning_from_row(row) for row in rows]
 
     def save_user_word_meaning(
         self, user_id: int, meaning: UserWordMeaning
@@ -1018,14 +1002,6 @@ class SQLiteRepository(Repository):
         meanings: Iterable[tuple[str, Language, POS, WordMeaning]],
     ) -> None:
         try:
-            meaning_ids = self._connection.execute(
-                "SELECT meaning_id FROM word_meanings WHERE source = ?",
-                (source,),
-            ).fetchall()
-            self._connection.executemany(
-                "DELETE FROM word_meaning_labels WHERE meaning_id = ?",
-                ((row["meaning_id"],) for row in meaning_ids),
-            )
             self._connection.execute(
                 "DELETE FROM word_meanings WHERE source = ?", (source,)
             )
@@ -1036,9 +1012,9 @@ class SQLiteRepository(Repository):
                         """
                         INSERT INTO word_meanings (
                             lexicon_entry_id, source, korean_definition,
-                            english_definition, gloss, frequency, display_order
+                            english_definition, gloss, display_order
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?)
                         """,
                         (
                             entry_id,
@@ -1046,15 +1022,10 @@ class SQLiteRepository(Repository):
                             meaning.korean_definition,
                             meaning.english_definition,
                             meaning.gloss,
-                            meaning.frequency.name,
                             meaning.display_order,
                         ),
                         commit=False,
                     )
-                )
-                self._connection.executemany(
-                    "INSERT INTO word_meaning_labels (meaning_id, label) VALUES (?, ?)",
-                    ((meaning.meaning_id, label.name) for label in meaning.labels),
                 )
             self._connection.execute(
                 """
@@ -1162,7 +1133,6 @@ class SQLiteRepository(Repository):
             korean_definition=row["korean_definition"],
             english_definition=row["english_definition"],
             gloss=row["gloss"],
-            frequency=MeaningFrequency[row["frequency"]],
             display_order=row["display_order"],
         )
 

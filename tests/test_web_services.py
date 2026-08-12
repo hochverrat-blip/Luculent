@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
 import app.settings as settings_module
@@ -72,8 +72,6 @@ def test_get_due_word_returns_next_word_with_meanings(tmp_path, monkeypatch):
                 "korean_definition": "말이나 글의 단위.",
                 "english_definition": "A unit of speech or writing.",
                 "gloss": "word",
-                "frequency": "Common",
-                "labels": [],
             }
         ],
         "user_meanings": [],
@@ -327,6 +325,33 @@ def test_activate_doc_part_makes_its_words_due(tmp_path, monkeypatch):
     assert known.status_code == 200
     assert known.json["word"]["status"] == "Known"
     assert known.json["due_count"] == 0
+
+
+def test_study_count_includes_lookahead_but_dashboard_count_does_not(
+    tmp_path, monkeypatch
+):
+    _configure_database(tmp_path, monkeypatch)
+    with create_repository() as repository:
+        user = User(None, "Reader")
+        repository.save_user(user)
+        document = Document(None, "Reading", "Text", Language.KOREAN)
+        repository.save_document(user.user_id, document)
+        part = DocPart(None, "단어", 0, active=True)
+        repository.save_doc_part(document.document_id, part)
+        word = Word(None, "단어", Language.KOREAN, POS.NOUN)
+        word.status = Status.LEARNING
+        word.due = datetime.now(timezone.utc) + timedelta(minutes=10)
+        repository.save_word(user.user_id, word)
+        repository.save_doc_part_word(DocPartWord(word, part, 1))
+
+    client = create_app().test_client()
+    query = {"username": "Reader"}
+
+    dashboard = client.get("/due-count", query_string=query)
+    study = client.get("/study-due-count", query_string=query)
+
+    assert dashboard.json == {"due_count": 0}
+    assert study.json == {"due_count": 1}
 
 
 def test_activate_doc_part_rejects_another_users_part(tmp_path, monkeypatch):

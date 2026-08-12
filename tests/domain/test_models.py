@@ -67,14 +67,6 @@ def test_enum_values():
         "ADVERB": "Adverb",
         "ADJECTIVE": "Adjective",
     }
-    assert {item.name: item.value for item in MeaningFrequency} == {
-        "COMMON": "Common",
-        "RARE": "Rare",
-    }
-    assert {item.name: item.value for item in MeaningLabel} == {
-        "ARCHAIC": "Archaic",
-        "TECHNICAL": "Technical",
-    }
 
 
 def test_user_properties():
@@ -185,8 +177,6 @@ def test_word_meaning_properties_and_updates():
         korean_definition="기록을 담은 것",
         english_definition="a written record",
         gloss="document",
-        frequency=MeaningFrequency.RARE,
-        labels={MeaningLabel.TECHNICAL},
         display_order=2,
     )
 
@@ -194,22 +184,16 @@ def test_word_meaning_properties_and_updates():
     assert meaning.korean_definition == "기록을 담은 것"
     assert meaning.english_definition == "a written record"
     assert meaning.gloss == "document"
-    assert meaning.frequency is MeaningFrequency.RARE
-    assert meaning.labels == {MeaningLabel.TECHNICAL}
     assert meaning.display_order == 2
 
     meaning.korean_definition = "기록"
     meaning.english_definition = "record"
     meaning.gloss = "record"
-    meaning.frequency = MeaningFrequency.COMMON
-    meaning.labels.add(MeaningLabel.ARCHAIC)
     meaning.display_order = 1
 
     assert meaning.korean_definition == "기록"
     assert meaning.english_definition == "record"
     assert meaning.gloss == "record"
-    assert meaning.frequency is MeaningFrequency.COMMON
-    assert meaning.labels == {MeaningLabel.TECHNICAL, MeaningLabel.ARCHAIC}
     assert meaning.display_order == 1
 
 

@@ -296,7 +296,7 @@ async function loadStudyWord() {
         const query = new URLSearchParams({username: state.username});
         const [{word}, due] = await Promise.all([
             api(`/get-due-word?${query}`),
-            api(`/due-count?${query}`)
+            api(`/study-due-count?${query}`)
         ]);
         state.currentWord = word;
         state.shownAt = Date.now();

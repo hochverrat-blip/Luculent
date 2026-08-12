@@ -15,6 +15,7 @@ from app.services.base_service import Service
 
 _SCHEDULER = Scheduler()
 _READABILITY_HORIZON = timedelta(days=7)
+_DUE_LOOKAHEAD = timedelta(minutes=20)
 
 _RATINGS = {
     Response.AGAIN: Rating.Again,
@@ -78,8 +79,13 @@ class WordService(Service):
             raise ValueError("User must be saved before getting due words")
 
         now = datetime.now(timezone.utc)
-        return self._repository.get_due_word_in_active_parts(
+        word = self._repository.get_due_word_in_active_parts(
             user.user_id, now, exclude_word_id
+        )
+        if word is not None:
+            return word
+        return self._repository.get_due_word_in_active_parts(
+            user.user_id, now + _DUE_LOOKAHEAD, exclude_word_id
         )
 
     def count_due(self, user: User) -> int:
@@ -87,6 +93,13 @@ class WordService(Service):
             raise ValueError("User must be saved before counting due words")
         return self._repository.count_due_words_in_active_parts(
             user.user_id, datetime.now(timezone.utc)
+        )
+
+    def count_study_due(self, user: User) -> int:
+        if user.user_id is None or self._repository.get_user(user.user_id) is None:
+            raise ValueError("User must be saved before counting due words")
+        return self._repository.count_due_words_in_active_parts(
+            user.user_id, datetime.now(timezone.utc) + _DUE_LOOKAHEAD
         )
 
     @staticmethod
@@ -103,12 +116,12 @@ class WordService(Service):
 
     def record_response(
         self,
+        user: User,
         word: Word,
         response: Response,
         duration_ms: int | None = None,
     ) -> None:
-        if word.word_id is None or self._repository.get_word(word.word_id) is None:
-            raise ValueError("Word must be saved before recording a response")
+        self._require_owned_word(user, word, "recording a response")
         if word.status not in _FSRS_STATES:
             raise ValueError("Known or suspended words cannot be reviewed")
         if duration_ms is not None and duration_ms < 0:
@@ -141,13 +154,20 @@ class WordService(Service):
             ),
         )
 
-    def mark_known(self, word: Word) -> None:
-        if word.word_id is None or self._repository.get_word(word.word_id) is None:
-            raise ValueError("Word must be saved before marking it known")
+    def mark_known(self, user: User, word: Word) -> None:
+        self._require_owned_word(user, word, "marking it known")
         word.status = Status.KNOWN
         word.step = None
         word.due = None
         self._repository.update_word_study(word)
+
+    def _require_owned_word(self, user: User, word: Word, action: str) -> None:
+        if (
+            user.user_id is None
+            or word.word_id is None
+            or self._repository.get_user_word(user.user_id, word.word_id) is None
+        ):
+            raise ValueError(f"Word must belong to the user before {action}")
 
     @staticmethod
     def _fsrs_card(word: Word, now: datetime) -> Card:

@@ -101,7 +101,8 @@ def test_new_user_rejects_blank_and_duplicate_names(service_context):
 
     user_service.new_user("Vance")
     with pytest.raises(ValueError, match="already exists"):
-        user_service.new_user("Vance")
+        user_service.new_user("vAnCe")
+    assert user_service.get_user("VANCE").name == "Vance"
 
 
 def test_import_document_file_preserves_source_and_builds_ordered_parts(
@@ -346,19 +347,25 @@ def test_activate_docpart_makes_it_users_only_active_part(
 
 
 def test_get_md_text_bolds_studied_words_but_not_known_words(
-    service_context, tmp_path
+    service_context, tmp_path, monkeypatch
 ):
     user_service, document_service = service_context
     user = user_service.new_user("Reader")
     path = tmp_path / "reading.txt"
     path.write_text("Cats chase mice quickly.", encoding="utf-8")
-    document_service.import_document_file(user, path)
+    document = document_service.import_document_file(user, path)
+    part = document.doc_parts[0]
     words = document_service._repository.list_words(user.user_id)
     cat = next(word for word in words if word.lemma == "cat")
     cat.status = Status.KNOWN
     document_service._repository.update_word_study(cat)
+    monkeypatch.setattr(
+        DocumentService,
+        "_detect_language_code",
+        staticmethod(lambda text: pytest.fail("stored language should be used")),
+    )
 
-    marked = document_service.get_md_text(user, "Cats chase mice quickly.")
+    marked = document_service.get_md_text(user, part)
 
     assert marked == "Cats **chase** **mice** **quickly**."
 
@@ -579,13 +586,13 @@ def test_get_due_returns_only_due_words_in_active_parts(
                 word_service._repository.save_doc_part_word(
                     DocPartWord(inactive, inactive_part, 1)
                 )
-                word_service.record_response(reviewed_today, Response.GOOD)
+                word_service.record_response(user, reviewed_today, Response.GOOD)
 
                 words = []
                 for _ in range(3):
                     word = word_service.get_due(user)
                     words.append(word)
-                    word_service.mark_known(word)
+                    word_service.mark_known(user, word)
                 no_more_due = word_service.get_due(user)
 
     assert {word.word_id for word in words} == {
@@ -604,6 +611,90 @@ def test_get_due_requires_a_saved_user(configured_settings):
             word_service.get_due(User(None, "Reader"))
 
 
+def test_get_due_looks_ahead_twenty_minutes_when_nothing_is_due(
+    configured_settings,
+):
+    with UserService() as user_service:
+        with DocumentService() as document_service:
+            with WordService() as word_service:
+                user = user_service.new_user("Reader")
+                document = Document(None, "Reading", "Text", Language.KOREAN)
+                document_service._repository.save_document(user.user_id, document)
+                part = DocPart(None, "Text", 0, active=True)
+                document_service._repository.save_doc_part(
+                    document.document_id, part
+                )
+
+                soon = Word(None, "곧")
+                soon.status = Status.LEARNING
+                soon.due = datetime.now(timezone.utc) + timedelta(minutes=19)
+                later = Word(None, "나중")
+                later.status = Status.LEARNING
+                later.due = datetime.now(timezone.utc) + timedelta(minutes=21)
+                for word in (soon, later):
+                    word_service._repository.save_word(user.user_id, word)
+                    word_service._repository.save_doc_part_word(
+                        DocPartWord(word, part, 1)
+                    )
+
+                result = word_service.get_due(user)
+
+    assert result.word_id == soon.word_id
+
+
+def test_get_due_does_not_look_ahead_while_a_word_is_due(configured_settings):
+    with UserService() as user_service:
+        with DocumentService() as document_service:
+            with WordService() as word_service:
+                user = user_service.new_user("Reader")
+                document = Document(None, "Reading", "Text", Language.KOREAN)
+                document_service._repository.save_document(user.user_id, document)
+                part = DocPart(None, "Text", 0, active=True)
+                document_service._repository.save_doc_part(
+                    document.document_id, part
+                )
+
+                due = Word(None, "지금")
+                due.status = Status.LEARNING
+                due.due = datetime.now(timezone.utc) - timedelta(minutes=1)
+                soon = Word(None, "곧")
+                soon.status = Status.LEARNING
+                soon.due = datetime.now(timezone.utc) + timedelta(minutes=10)
+                for word in (due, soon):
+                    word_service._repository.save_word(user.user_id, word)
+                    word_service._repository.save_doc_part_word(
+                        DocPartWord(word, part, 1)
+                    )
+
+                result = word_service.get_due(user)
+
+    assert result.word_id == due.word_id
+
+
+def test_due_count_does_not_include_twenty_minute_lookahead(configured_settings):
+    with UserService() as user_service:
+        with DocumentService() as document_service:
+            with WordService() as word_service:
+                user = user_service.new_user("Reader")
+                document = Document(None, "Reading", "Text", Language.KOREAN)
+                document_service._repository.save_document(user.user_id, document)
+                part = DocPart(None, "Text", 0, active=True)
+                document_service._repository.save_doc_part(
+                    document.document_id, part
+                )
+                soon = Word(None, "곧")
+                soon.status = Status.LEARNING
+                soon.due = datetime.now(timezone.utc) + timedelta(minutes=10)
+                word_service._repository.save_word(user.user_id, soon)
+                word_service._repository.save_doc_part_word(
+                    DocPartWord(soon, part, 1)
+                )
+
+                assert word_service.get_due(user).word_id == soon.word_id
+                assert word_service.count_due(user) == 0
+                assert word_service.count_study_due(user) == 1
+
+
 def test_record_response_schedules_and_persists_word(configured_settings):
     with UserService() as user_service:
         with WordService() as word_service:
@@ -611,7 +702,7 @@ def test_record_response_schedules_and_persists_word(configured_settings):
             word = Word(None, "word")
             word_service._repository.save_word(user.user_id, word)
 
-            word_service.record_response(word, Response.GOOD, 2400)
+            word_service.record_response(user, word, Response.GOOD, 2400)
 
             loaded = word_service._repository.get_word(word.word_id)
             assert loaded.status is Status.LEARNING
@@ -624,7 +715,7 @@ def test_record_response_schedules_and_persists_word(configured_settings):
             assert reviews[0].response is Response.GOOD
             assert reviews[0].duration_ms == 2400
 
-            word_service.record_response(word, Response.GOOD)
+            word_service.record_response(user, word, Response.GOOD)
 
             loaded = word_service._repository.get_word(word.word_id)
             assert loaded.status is Status.REVIEW
@@ -640,7 +731,7 @@ def test_again_repeats_a_new_word_after_one_minute(configured_settings):
             word = Word(None, "word")
             word_service._repository.save_word(user.user_id, word)
 
-            word_service.record_response(word, Response.AGAIN)
+            word_service.record_response(user, word, Response.AGAIN)
 
             loaded = word_service._repository.get_word(word.word_id)
             assert loaded.status is Status.LEARNING
@@ -660,7 +751,7 @@ def test_failed_review_enters_relearning(configured_settings):
             word.due = datetime.now(timezone.utc)
             word_service._repository.save_word(user.user_id, word)
 
-            word_service.record_response(word, Response.AGAIN)
+            word_service.record_response(user, word, Response.AGAIN)
 
             loaded = word_service._repository.get_word(word.word_id)
             assert loaded.status is Status.RELEARNING
@@ -675,7 +766,7 @@ def test_mark_known_removes_word_from_review(configured_settings):
             word = Word(None, "word")
             word_service._repository.save_word(user.user_id, word)
 
-            word_service.mark_known(word)
+            word_service.mark_known(user, word)
 
             loaded = word_service._repository.get_word(word.word_id)
             assert loaded.status is Status.KNOWN
@@ -711,6 +802,27 @@ def test_add_and_delete_user_meaning(configured_settings):
 
 
 def test_record_response_requires_a_saved_word(configured_settings):
-    with WordService() as word_service:
-        with pytest.raises(ValueError, match="saved"):
-            word_service.record_response(Word(None, "word"), Response.GOOD)
+    with UserService() as user_service:
+        with WordService() as word_service:
+            user = user_service.new_user("Reader")
+            with pytest.raises(ValueError, match="belong"):
+                word_service.record_response(
+                    user, Word(None, "word"), Response.GOOD
+                )
+
+
+def test_study_changes_require_word_ownership(configured_settings):
+    with UserService() as user_service:
+        with WordService() as word_service:
+            owner = user_service.new_user("Owner")
+            other = user_service.new_user("Other")
+            word = Word(None, "단어")
+            word_service._repository.save_word(owner.user_id, word)
+
+            with pytest.raises(ValueError, match="belong"):
+                word_service.record_response(other, word, Response.GOOD)
+            with pytest.raises(ValueError, match="belong"):
+                word_service.mark_known(other, word)
+
+            loaded = word_service._repository.get_word(word.word_id)
+            assert loaded.status is Status.NEW

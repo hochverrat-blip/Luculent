@@ -5,8 +5,6 @@ import pytest
 from app.domain.document import DocPart, Document
 from app.domain.enums import (
     Language,
-    MeaningFrequency,
-    MeaningLabel,
     POS,
     Response,
     Status,
@@ -43,6 +41,7 @@ class RepositoryContract:
 
         loaded = repository.get_user_by_name("Lookup User")
         assert loaded.user_id == 102
+        assert repository.get_user_by_name("lookup user").name == "Lookup User"
         assert repository.get_user_by_name("Missing User") is None
         assert repository.delete_user(loaded.user_id) is True
         assert repository.delete_user(loaded.user_id) is False
@@ -80,7 +79,9 @@ class RepositoryContract:
         assert loaded.doc_parts[0].active is True
         assert loaded.doc_parts[0].readability == pytest.approx(0.75)
         assert repository.get_users_doc_part(201, 203).doc_part_id == 203
+        assert repository.get_users_doc_part_language(201, 203) is Language.KOREAN
         assert repository.get_users_doc_part(999, 203) is None
+        assert repository.get_users_doc_part_language(999, 203) is None
         assert repository.get_document(2147483000) is None
 
     def test_document_and_parts_are_saved_atomically(self, repository):
@@ -239,13 +240,11 @@ class RepositoryContract:
         repository.save_user(User(411, "Vance"))
         word = Word(412, lemma="배", language=Language.KOREAN, pos=POS.NOUN)
         repository.save_word(411, word)
-        rare = WordMeaning(
+        second = WordMeaning(
             414,
             korean_definition="물을 건너는 운송 수단",
             english_definition="a vessel used on water",
             gloss="boat",
-            frequency=MeaningFrequency.RARE,
-            labels={MeaningLabel.ARCHAIC, MeaningLabel.TECHNICAL},
             display_order=2,
         )
         common = WordMeaning(
@@ -256,29 +255,19 @@ class RepositoryContract:
             display_order=1,
         )
 
-        repository.save_word_meaning(412, rare)
+        repository.save_word_meaning(412, second)
         repository.save_word_meaning(412, common)
 
         loaded = repository.get_word(412)
         assert [meaning.meaning_id for meaning in loaded.meanings] == [413, 414]
-        assert loaded.meanings[0].frequency is MeaningFrequency.COMMON
-        assert loaded.meanings[0].labels == set()
         assert loaded.meanings[1].korean_definition == "물을 건너는 운송 수단"
         assert loaded.meanings[1].english_definition == "a vessel used on water"
         assert loaded.meanings[1].gloss == "boat"
-        assert loaded.meanings[1].frequency is MeaningFrequency.RARE
-        assert loaded.meanings[1].labels == {
-            MeaningLabel.ARCHAIC,
-            MeaningLabel.TECHNICAL,
-        }
-
-        rare.gloss = "ship"
-        rare.labels.remove(MeaningLabel.ARCHAIC)
-        repository.save_word_meaning(412, rare)
+        second.gloss = "ship"
+        repository.save_word_meaning(412, second)
 
         updated = repository.list_word_meanings(412)[1]
         assert updated.gloss == "ship"
-        assert updated.labels == {MeaningLabel.TECHNICAL}
 
     def test_lexicon_meanings_are_shared_between_users(self, repository):
         meaning = WordMeaning(

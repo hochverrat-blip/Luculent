@@ -23,7 +23,7 @@ During Study, reveal each word's meanings and select Again, Hard, Good, Easy, or
 
 ## Run Luculent
 
-> **Warning:** Luculent does not yet migrate existing databases. After a schema change, delete `luculent.db` or the `luculent_mysql_data` Docker volume and start again; this deletes all user and study data.
+> **Warning:** Luculent does not yet migrate existing databases. After a schema change, delete `luculent.db` or the `luculent_mysql_data` Docker volume and start again. This deletes all user and study data.
 
 Luculent requires internet access for initial setup and supports Python 3.10 through 3.13.
 

@@ -15,7 +15,15 @@ Luculent is a document-targeted vocabulary study application. It extracts vocabu
 
 - Click words in the reader view to see their definitions and optionally return Known or Suspended words to study
 
+## Using Luculent
+
+Create or select a user. Import a Korean text file or web page into the library. Luculent divides the reading into sections and gathers vocabulary for study. Choose a section and make it active to study its words. You can also open each section to read it in which case unknown words are highlighted.
+
+During Study, reveal each word's meanings and select Again, Hard, Good, Easy, or Known. Luculent schedules future reviews from these responses. Known is intended for words you do not expect to ever forget. The library's readability estimates update as your vocabulary knowledge changes.
+
 ## Run Luculent
+
+> **Warning:** Luculent does not yet migrate existing databases. After a schema change, delete `luculent.db` or the `luculent_mysql_data` Docker volume and start again; this deletes all user and study data.
 
 Luculent requires internet access for initial setup and supports Python 3.10 through 3.13.
 
